@@ -23,7 +23,7 @@ zabbix_export:
     description: |
       Zabbix UniFi API monitoring template for UniFi Site Manager API v1 (https://developer.ui.com/site-manager/v1.0.0/gettingstarted)
 
-      Template available at https://github.com/StreetKidsDirect/UnifiAPI-Zabbix
+      Template available at https://github.com/kairandles/zabbix-unifi
     groups:
     - name: Templates
     items:
