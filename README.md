@@ -470,6 +470,8 @@ The following alarms come from the **Ubiquiti UniFi RPS** template (local contro
 | Temperature critical | HIGH | Temp > `{$UNIFI.TEMP.HIGH}`°C |
 | Temperature high | WARNING | Temp > `{$UNIFI.TEMP.WARN}`°C |
 | RPS port disconnected — redundancy lost | WARNING | Port is not connected; device has no redundant power path |
+
+> **RPS port discovery** only creates items for ports that have a connected device. Ports with a generic name (e.g. `Port 1`, `Port 2`) are filtered out — this is by design, as those ports have nothing plugged in yet. Once a device is connected, the RPS names the port after the device's hostname (e.g. `FRN1CORESW01`), and it is automatically discovered on the next LLD cycle.
 | CPU usage high | WARNING | CPU > `{$UNIFI.CPU.USAGE.WARN}`% |
 | Memory usage high | WARNING | Memory > `{$UNIFI.MEM.USAGE.WARN}`% |
 | Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold — recent reboot |
