@@ -38,6 +38,7 @@ This template set bridges the UniFi Site Manager cloud API (`api.ui.com`) with l
 - Local gateway CPU, memory, temperature, WAN status, VPN tunnels, HA/Shadow Mode
 - Per-AP radio health (band, channel, utilisation, client count, retries)
 - Per-switch port status, errors, PoE power, and TX/RX rates
+- Per-SFP port temperature, RX/TX optical power (dBm), voltage, current, and TX/RX fault state
 - UPS battery level, runtime, mains state, and outlet relay state
 - Redundant Power Supply failover and port redundancy state
 - Cloud and local controller health checks for all discovered hosts
@@ -259,6 +260,19 @@ Common optional overrides:
 | `{$UNIFI.UPS.BATTERY.HIGH}` | `10` | UPS battery critical threshold (%) |
 | `{$UNIFI.UPS.RUNTIME.HIGH}` | `300` | UPS runtime critical threshold (seconds) |
 
+### Per-SFP Port (USW — discovered automatically for ports with `sfp_found = true`)
+
+| Macro | Default | Description |
+|-------|---------|-------------|
+| `{$UNIFI.SFP.TEMP.WARN}` | `70` | SFP module temperature warning threshold (°C). Active 10G SFP+ modules routinely run 60–65°C; 70°C indicates a genuinely elevated condition. |
+| `{$UNIFI.SFP.TEMP.HIGH}` | `75` | SFP module temperature critical threshold (°C). Commercial SFP+ modules are typically rated to 70°C; above this degradation risk is high. |
+| `{$UNIFI.SFP.RXPOWER.LOW.WARN}` | `-12` | RX optical power warning threshold (dBm) |
+| `{$UNIFI.SFP.RXPOWER.LOW.HIGH}` | `-16` | RX optical power critical threshold (dBm). Near receiver sensitivity limit for 10GBase-LR. |
+| `{$UNIFI.SFP.TXPOWER.LOW.WARN}` | `-6` | TX laser power warning threshold (dBm) |
+| `{$UNIFI.SFP.TXPOWER.LOW.HIGH}` | `-9` | TX laser power critical threshold (dBm). Near minimum spec for 10GBase-LR. |
+
+> **SFP temperature note:** SFP+ modules run significantly hotter than the switch chassis. 60–65°C is normal for an active 10G module in a warm rack. Raise `{$UNIFI.SFP.TEMP.WARN}` to `67` on a per-host basis if you see persistent warnings on healthy modules in a warm environment.
+
 ---
 
 ## Alarms Reference
@@ -398,11 +412,19 @@ The following alarms come from the **Ubiquiti UniFi USW** template (local contro
 | Device offline (cloud) | HIGH | Cloud API reports status = offline |
 | CPU usage critical | HIGH | CPU > `{$UNIFI.CPU.USAGE.HIGH}`% |
 | Memory usage critical | HIGH | Memory > `{$UNIFI.MEM.USAGE.HIGH}`% |
+| SFP TX fault active | HIGH | Module reports a transmit laser fault — likely failed SFP or broken TX fibre |
+| SFP RX fault active | HIGH | Module reports a receive fault — likely broken RX fibre or failed remote laser |
+| SFP temperature critical | HIGH | SFP module temp > `{$UNIFI.SFP.TEMP.HIGH}`°C |
+| SFP RX power critical low | HIGH | Received optical power < `{$UNIFI.SFP.RXPOWER.LOW.HIGH}` dBm — near receiver limit |
+| SFP TX power critical low | HIGH | Transmit laser output < `{$UNIFI.SFP.TXPOWER.LOW.HIGH}` dBm — laser likely failing |
 | CPU usage high | WARNING | CPU > `{$UNIFI.CPU.USAGE.WARN}`% |
 | Memory usage high | WARNING | Memory > `{$UNIFI.MEM.USAGE.WARN}`% |
 | Port down | WARNING | Port transitions from up to down after previously being up |
 | Port TX errors increasing | WARNING | TX error counter is actively incrementing |
 | Port RX errors increasing | WARNING | RX error counter is actively incrementing |
+| SFP temperature high | WARNING | SFP module temp > `{$UNIFI.SFP.TEMP.WARN}`°C |
+| SFP RX power low | WARNING | Received optical power < `{$UNIFI.SFP.RXPOWER.LOW.WARN}` dBm |
+| SFP TX power low | WARNING | Transmit laser output < `{$UNIFI.SFP.TXPOWER.LOW.WARN}` dBm |
 | Firmware upgrade available | WARNING | Local controller reports an upgrade is available |
 | Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold — recent reboot |
 | Device no longer managed | AVERAGE | Device has been removed from management |
@@ -410,6 +432,8 @@ The following alarms come from the **Ubiquiti UniFi USW** template (local contro
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
 
 > **Port down alarms** resolve immediately if the port comes back up. If the port remains down, the alarm auto-resolves after 24 hours. Operators can also close it manually for ports that are intentionally unused.
+
+> **SFP monitoring** is discovered automatically. Items are only created for ports where `sfp_found = true` (i.e. a module is physically inserted). Voltage and laser current are logged for trending but have no alarm thresholds by default. All SFP alarms are suppressed if the device is offline. Supported models: any USW with SFP/SFP+ ports (confirmed on USW-Pro-Aggregation `USAGGPRO`).
 
 ### UPS (Uninterruptible Power Supply)
 

@@ -4846,6 +4846,282 @@ zabbix_export:
         - $.data[0].port_table
         error_handler: CUSTOM_VALUE
         error_handler_params: '[]'
+    - uuid: 29140a04120c4865a13caee6974991df
+      name: Discover SFP Ports
+      type: DEPENDENT
+      key: unifi.usw.sfp.discovery
+      delay: '0'
+      filter:
+        conditions:
+        - macro: '{#SFPFOUND}'
+          value: ^true$
+          operator: MATCHES_REGEX
+          formulaid: A
+      item_prototypes:
+      - uuid: c39b37d9e70c4dda93610c88baab8079
+        name: Port {#PORTID} ({#PORTNAME}) SFP TX Fault
+        type: DEPENDENT
+        key: unifi.usw.sfp.txfault[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_txfault.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: 'false'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: f9682458522740f39b3121765461b89f
+          expression: find(/Ubiquiti UniFi USW/unifi.usw.sfp.txfault[{#PORTID}],#1,"regexp","true")=1
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP TX fault active'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: The SFP module on port {#PORTID} ({#PORTNAME}) is reporting a transmit fault. This typically
+            indicates a failed or failing laser, a faulty SFP module, or a broken fibre on the TX strand. The
+            link will likely be down. Replace the SFP module and check the fibre patch lead.
+      - uuid: 76ca0175c3a34535b40aa1040e8e43f7
+        name: Port {#PORTID} ({#PORTNAME}) SFP RX Fault
+        type: DEPENDENT
+        key: unifi.usw.sfp.rxfault[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_rxfault.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: 'false'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 333f67aee750438ead2356fe1d9d46db
+          expression: find(/Ubiquiti UniFi USW/unifi.usw.sfp.rxfault[{#PORTID}],#1,"regexp","true")=1
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP RX fault active'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: The SFP module on port {#PORTID} ({#PORTNAME}) is reporting a receive fault. This typically
+            indicates the RX fibre strand is disconnected, dirty, or broken, or the remote TX laser has failed.
+            Check the fibre patch lead and clean both connectors.
+      - uuid: 334a82dcf87b4ef0aa854948d7637982
+        name: Port {#PORTID} ({#PORTNAME}) SFP Temperature
+        type: DEPENDENT
+        key: unifi.usw.sfp.temperature[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: °C
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_temperature.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 0ce4bcbfddff4797bfaebd1c3e5b1ef6
+          expression: last(/Ubiquiti UniFi USW/unifi.usw.sfp.temperature[{#PORTID}])>{$UNIFI.SFP.TEMP.HIGH} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.temperature[{#PORTID}])>0
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP temperature critical: {ITEM.LASTVALUE} (>{$UNIFI.SFP.TEMP.HIGH}°C)'
+          priority: HIGH
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: The SFP module on port {#PORTID} ({#PORTNAME}) has exceeded the critical temperature
+            threshold ({$UNIFI.SFP.TEMP.HIGH}°C). At this temperature optical output power degrades and module
+            failure is likely. Ensure the switch has adequate airflow and modules are not blocking ventilation.
+        - uuid: fbe3f1618da34171bbf40027ee3d4957
+          expression: last(/Ubiquiti UniFi USW/unifi.usw.sfp.temperature[{#PORTID}])>{$UNIFI.SFP.TEMP.WARN} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.temperature[{#PORTID}])<={$UNIFI.SFP.TEMP.HIGH} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.temperature[{#PORTID}])>0
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP temperature high: {ITEM.LASTVALUE} (>{$UNIFI.SFP.TEMP.WARN}°C)'
+          priority: WARNING
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: The SFP module on port {#PORTID} ({#PORTNAME}) is above the warning temperature threshold
+            ({$UNIFI.SFP.TEMP.WARN}°C). Commercial-grade SFP+ modules are typically rated to 70°C. Monitor for
+            further increases and check for blocked airflow.
+      - uuid: 205fc33c635e4f98aca4178f2e7ae6f1
+        name: Port {#PORTID} ({#PORTNAME}) SFP RX Power
+        type: DEPENDENT
+        key: unifi.usw.sfp.rxpower[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: dBm
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_rxpower.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '-40'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: b052a47710e944ea96dc4f502ac278b8
+          expression: last(/Ubiquiti UniFi USW/unifi.usw.sfp.rxpower[{#PORTID}])<{$UNIFI.SFP.RXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.rxpower[{#PORTID}])>-39
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP RX power critical low: {ITEM.LASTVALUE} dBm'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: Received optical power on port {#PORTID} ({#PORTNAME}) is critically low
+            ({$UNIFI.SFP.RXPOWER.LOW.HIGH} dBm threshold). The link is near receiver sensitivity and bit errors
+            are likely. Check for a dirty or damaged fibre connector, excessive bend radius, or a failing
+            remote transmitter.
+        - uuid: 883c7265be754dc5b9239154cf9eb4f7
+          expression: last(/Ubiquiti UniFi USW/unifi.usw.sfp.rxpower[{#PORTID}])<{$UNIFI.SFP.RXPOWER.LOW.WARN} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.rxpower[{#PORTID}])>={$UNIFI.SFP.RXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.rxpower[{#PORTID}])>-39
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP RX power low: {ITEM.LASTVALUE} dBm'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: Received optical power on port {#PORTID} ({#PORTNAME}) is below the warning threshold
+            ({$UNIFI.SFP.RXPOWER.LOW.WARN} dBm). Signal degradation may cause intermittent errors under load.
+            Clean both fibre connectors and check for excessive bend radius or damaged patch leads.
+      - uuid: 382e6679355e4df8a15284fabd7863c1
+        name: Port {#PORTID} ({#PORTNAME}) SFP TX Power
+        type: DEPENDENT
+        key: unifi.usw.sfp.txpower[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: dBm
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_txpower.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '-40'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 44a20ac3835b40368721f7b9ef6c89ee
+          expression: last(/Ubiquiti UniFi USW/unifi.usw.sfp.txpower[{#PORTID}])<{$UNIFI.SFP.TXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.txpower[{#PORTID}])>-39
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP TX power critical low: {ITEM.LASTVALUE} dBm'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: Transmit laser power on port {#PORTID} ({#PORTNAME}) is critically low
+            ({$UNIFI.SFP.TXPOWER.LOW.HIGH} dBm threshold). The module laser is likely failing. Plan a
+            replacement — a module at this level may be causing signal loss at the far end even if no RX
+            fault is yet reported locally.
+        - uuid: 77cc2394ec624f14963baa0779617e9d
+          expression: last(/Ubiquiti UniFi USW/unifi.usw.sfp.txpower[{#PORTID}])<{$UNIFI.SFP.TXPOWER.LOW.WARN} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.txpower[{#PORTID}])>={$UNIFI.SFP.TXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.txpower[{#PORTID}])>-39
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP TX power low: {ITEM.LASTVALUE} dBm'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+          description: Transmit laser output on port {#PORTID} ({#PORTNAME}) is below the warning threshold
+            ({$UNIFI.SFP.TXPOWER.LOW.WARN} dBm). This may indicate a degrading laser. A continuing drop will
+            eventually cause link errors at the far end.
+      - uuid: 0e4e35652d5445c3a6d7c61f4a312885
+        name: Port {#PORTID} ({#PORTNAME}) SFP Voltage
+        type: DEPENDENT
+        key: unifi.usw.sfp.voltage[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: V
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_voltage.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 89a3bf8db4fd4931b235c65f2f81faf1
+        name: Port {#PORTID} ({#PORTNAME}) SFP Current
+        type: DEPENDENT
+        key: unifi.usw.sfp.current[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: mA
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_current.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      master_item:
+        key: unifi.usw.device
+      lld_macro_paths:
+      - lld_macro: '{#PORTID}'
+        path: $.port_idx
+      - lld_macro: '{#PORTNAME}'
+        path: $.name
+      - lld_macro: '{#SFPFOUND}'
+        path: $.sfp_found
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.data[0].port_table
+        error_handler: CUSTOM_VALUE
+        error_handler_params: '[]'
     macros:
     - macro: '{$DEVICEID}'
       description: Device MAC - set by host prototype
@@ -4883,6 +5159,24 @@ zabbix_export:
     - macro: '{$UNIFI.UPTIME.WARN}'
       value: '24'
       description: Uptime warning threshold (hours). Fire if uptime < this value × 3600 seconds - default 24h.
+    - macro: '{$UNIFI.SFP.TEMP.WARN}'
+      value: '70'
+      description: SFP module temperature warning threshold (°C). Active 10G SFP+ modules routinely run 60-65°C; 70°C indicates a genuinely elevated condition.
+    - macro: '{$UNIFI.SFP.TEMP.HIGH}'
+      value: '75'
+      description: SFP module temperature critical threshold (°C). Commercial SFP+ modules are typically rated to 70°C; above this degradation and failure risk is high.
+    - macro: '{$UNIFI.SFP.RXPOWER.LOW.WARN}'
+      value: '-12'
+      description: SFP RX power warning threshold (dBm). Below this level signal quality is degrading.
+    - macro: '{$UNIFI.SFP.RXPOWER.LOW.HIGH}'
+      value: '-16'
+      description: SFP RX power critical threshold (dBm). Near receiver sensitivity limit for 10GBase-LR.
+    - macro: '{$UNIFI.SFP.TXPOWER.LOW.WARN}'
+      value: '-6'
+      description: SFP TX power warning threshold (dBm). Below normal output for 10GBase-LR.
+    - macro: '{$UNIFI.SFP.TXPOWER.LOW.HIGH}'
+      value: '-9'
+      description: SFP TX power critical threshold (dBm). Near minimum transmit spec for 10GBase-LR.
   - uuid: ed8f0edb07ac4bdcbd4a698d2df76649
     template: Ubiquiti UniFi UPS
     name: Ubiquiti UniFi UPS
