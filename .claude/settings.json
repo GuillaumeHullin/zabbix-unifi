@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.zabbix.com)",
+      "WebFetch(domain:support.zabbix.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:git.zabbix.com)"
+    ]
+  }
+}

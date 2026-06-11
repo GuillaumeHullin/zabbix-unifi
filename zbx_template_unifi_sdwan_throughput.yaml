@@ -1,0 +1,447 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+  - uuid: da4ab4a70a02478a8a36719a2107c4f8
+    name: Templates
+  host_groups:
+  - uuid: b7ab6086123c4872b63566abdd7ee74e
+    name: Unifi Site Hosts
+  - uuid: 20637b9addc4409393c924f6a260603a
+    name: SD-WAN Gateways
+  templates:
+  - uuid: 1305715b11424725ad4205a3a322cb33
+    template: Ubiquiti UniFi SD-WAN Throughput
+    name: Ubiquiti UniFi SD-WAN Throughput
+    description: |
+      Apply to ONE seed host in Zabbix. Set two macros:
+        {$APIKEY} — UniFi cloud API key
+        {$SNMP_COMMUNITY} — SNMPv2c community for your gateways
+
+      Fetches the UniFi cloud API to discover all SD-WAN gateways. Creates a child
+      host per gateway with the Ubiquiti UniFi SD-WAN Gateway template. Each child
+      host receives its management IP, site name, SNMP community, and the full IP-to-name
+      map — all passed via LLD macros. No static config needed.
+    groups:
+    - name: Templates
+    items:
+    - uuid: e399b50bf318411c967c88f90cb31a49
+      name: 'SD-WAN: UniFi API Host Map'
+      type: HTTP_AGENT
+      key: sdwan.unifi.api.hostmap
+      delay: 15m
+      history: 1h
+      value_type: TEXT
+      trends: '0'
+      url: 'https://api.ui.com/v1/hosts'
+      headers:
+      - name: X-API-KEY
+        value: '{$APIKEY}'
+      - name: Accept
+        value: application/json
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - |
+          // Returns a JSON array of gateway objects for LLD:
+          // [{ip, name, namemap, community}, ...]
+          // ip      = RFC-1918 management IP (.200.1 preferred, else first .x.x.1)
+          // name    = human-readable site name from reportedState.name
+          // namemap = JSON string of ALL RFC-1918 IP -> name mappings (for tunnel labels)
+          // community is added by the LLD preprocessing JS below (not here)
+          function isRFC1918(ip) {
+              var p = ip.split('.');
+              if (p.length !== 4) return false;
+              var a = parseInt(p[0],10), b = parseInt(p[1],10);
+              if (a === 10) return true;
+              if (a === 192 && b === 168) return true;
+              if (a === 172 && b >= 16 && b <= 31) return true;
+              return false;
+          }
+          var data;
+          try { data = JSON.parse(value); } catch(e) { return '[]'; }
+          var hosts = data.data || [];
+          var nameMap = {};
+          for (var i = 0; i < hosts.length; i++) {
+              var h = hosts[i];
+              var rs = h.reportedState || {};
+              var name = rs.name || rs.hostname || '';
+              if (!name) continue;
+              var addrs = rs.ipAddrs || [];
+              for (var j = 0; j < addrs.length; j++) {
+                  var ip = addrs[j];
+                  if (ip.indexOf(':') >= 0) continue;
+                  if (isRFC1918(ip)) nameMap[ip] = name;
+              }
+          }
+          var nameMapJson = JSON.stringify(nameMap);
+          var result = [];
+          for (var i = 0; i < hosts.length; i++) {
+              var h = hosts[i];
+              var rs = h.reportedState || {};
+              var name = rs.name || rs.hostname || '';
+              if (!name) continue;
+              var addrs = rs.ipAddrs || [];
+              var mgmt = '';
+              for (var j = 0; j < addrs.length; j++) {
+                  var ip = addrs[j];
+                  if (ip.indexOf(':') >= 0) continue;
+                  if (!isRFC1918(ip)) continue;
+                  var parts = ip.split('.');
+                  if (parts[3] !== '1') continue;
+                  if (parts[2] === '200') { mgmt = ip; break; }
+                  if (!mgmt) mgmt = ip;
+              }
+              if (!mgmt) continue;
+              result.push({ip: mgmt, name: name, namemap: nameMapJson});
+          }
+          return JSON.stringify(result);
+      description: Fetches all consoles from the UniFi cloud API. Builds the gateway
+        discovery array and the full RFC-1918 IP-to-name map passed to child hosts.
+      tags:
+      - tag: component
+        value: raw
+    discovery_rules:
+    - uuid: b6a7b71cc66b4c8eadbbac3301679673
+      name: Discover SD-WAN Gateways
+      type: DEPENDENT
+      key: sdwan.discover.gateways
+      delay: '0'
+      description: Discovers SD-WAN gateways from the UniFi cloud API item. Creates
+        one child host per gateway running the Ubiquiti UniFi SD-WAN Gateway template.
+      host_prototypes:
+      - uuid: 799d6de893c644798a6a0e714d9e983a
+        host: 'sdwan-gw-{#GW_IP}'
+        name: '{#GW_NAME}'
+        inventory_mode: AUTOMATIC
+        group_links:
+        - group:
+            name: Unifi Site Hosts
+        - group:
+            name: SD-WAN Gateways
+        templates:
+        - name: Ubiquiti UniFi SD-WAN Gateway
+        macros:
+        - macro: '{$SNMP_COMMUNITY}'
+          value: '{#GW_COMMUNITY}'
+          type: SECRET_TEXT
+          description: SNMP community passed from seed host via LLD
+        - macro: '{$GW_IP}'
+          value: '{#GW_IP}'
+          description: Management IP of this gateway
+        - macro: '{$SDWAN_NAMEMAP}'
+          value: '{#GW_NAMEMAP}'
+          description: Full RFC-1918 IP to site name map from UniFi API
+        custom_interfaces: 'YES'
+        interfaces:
+        - type: SNMP
+          ip: '{#GW_IP}'
+          port: '161'
+          details:
+            community: '{$SNMP_COMMUNITY}'
+      master_item:
+        key: sdwan.unifi.api.hostmap
+      lld_macro_paths:
+      - lld_macro: '{#GW_IP}'
+        path: $.ip
+      - lld_macro: '{#GW_NAME}'
+        path: $.name
+      - lld_macro: '{#GW_NAMEMAP}'
+        path: $.namemap
+      - lld_macro: '{#GW_COMMUNITY}'
+        path: $.community
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - |
+          // Inject the SNMP community (resolved from host macro) into each entry.
+          // Zabbix substitutes {$SNMP_COMMUNITY} before running this JS so the
+          // actual community value is embedded in the LLD output.
+          var community = '{$SNMP_COMMUNITY}';
+          var entries;
+          try { entries = JSON.parse(value); } catch(e) { return '[]'; }
+          for (var i = 0; i < entries.length; i++) {
+              entries[i].community = community;
+          }
+          return JSON.stringify(entries);
+    macros:
+    - macro: '{$SNMP_COMMUNITY}'
+      type: SECRET_TEXT
+      description: SNMPv2c community string. Passed to all discovered gateway child hosts.
+    - macro: '{$APIKEY}'
+      type: SECRET_TEXT
+      description: UniFi cloud API key from account.ui.com
+  - uuid: 52da6d8f10374a4f9df9836fe5782709
+    template: Ubiquiti UniFi SD-WAN Gateway
+    name: Ubiquiti UniFi SD-WAN Gateway
+    description: |
+      Auto-applied to SD-WAN gateways discovered by Ubiquiti UniFi SD-WAN Throughput.
+      Do not assign manually.
+
+      Performs SNMP-based tunnel discovery on this gateway. Derives remote tunnel
+      endpoints from the routing table, labels items using the site name map passed
+      from the seed host via {$SDWAN_NAMEMAP}.
+    groups:
+    - name: Templates
+    items:
+    - uuid: 25d4a8b03ec14ca6af946f1dfe6f77c7
+      name: 'SD-WAN: SNMP Walk (ifName, ifAlias, Routes)'
+      type: SNMP_AGENT
+      snmp_oid: 'walk[.1.3.6.1.2.1.31.1.1.1.1,.1.3.6.1.2.1.31.1.1.1.18,.1.3.6.1.2.1.4.24.4.1.5]'
+      key: sdwan.snmp.walk.raw
+      delay: 5m
+      history: 1h
+      value_type: TEXT
+      trends: '0'
+      description: Combined SNMP walk of ifName, ifAlias, and ipCidrRouteIfIndex.
+        Used by the tunnel LLD rule to discover SD-WAN WireGuard interfaces and derive
+        remote management IPs from /24 routes.
+      tags:
+      - tag: component
+        value: raw
+    discovery_rules:
+    - uuid: aa08a3f480a14a13bb6f63890993f552
+      name: Discover SD-WAN Tunnels
+      type: DEPENDENT
+      key: sdwan.discover.tunnels
+      delay: '0'
+      description: Discovers SD-WAN WireGuard tunnels from the SNMP walk. Derives
+        remote management IPs from /24 routes, resolves site names from {$SDWAN_NAMEMAP}.
+      item_prototypes:
+      - uuid: 9d404cfb0adc4ec9947680f2b3c18e38
+        name: 'SD-WAN [{#SITENAME}] [{#IFNAME}] Inbound Throughput'
+        type: SNMP_AGENT
+        snmp_oid: '.1.3.6.1.2.1.31.1.1.1.6.{#SNMPINDEX}'
+        key: 'sdwan.tunnel.in.bps[{#REMOTEMGMT}]'
+        delay: 30s
+        history: 7d
+        trends: 90d
+        value_type: FLOAT
+        units: bps
+        description: Inbound throughput (ifHCInOctets) on tunnel {#IFNAME} to {#SITENAME}.
+        preprocessing:
+        - type: CHANGE_PER_SECOND
+          parameters: []
+        - type: MULTIPLIER
+          parameters:
+          - '8'
+        tags:
+        - tag: component
+          value: sdwan
+        - tag: site
+          value: '{#SITENAME}'
+        - tag: tunnel
+          value: '{#IFNAME}'
+      - uuid: 4fb1c9d196f34f6f9f716129b8ae2760
+        name: 'SD-WAN [{#SITENAME}] [{#IFNAME}] Outbound Throughput'
+        type: SNMP_AGENT
+        snmp_oid: '.1.3.6.1.2.1.31.1.1.1.10.{#SNMPINDEX}'
+        key: 'sdwan.tunnel.out.bps[{#REMOTEMGMT}]'
+        delay: 30s
+        history: 7d
+        trends: 90d
+        value_type: FLOAT
+        units: bps
+        description: Outbound throughput (ifHCOutOctets) on tunnel {#IFNAME} to {#SITENAME}.
+        preprocessing:
+        - type: CHANGE_PER_SECOND
+          parameters: []
+        - type: MULTIPLIER
+          parameters:
+          - '8'
+        tags:
+        - tag: component
+          value: sdwan
+        - tag: site
+          value: '{#SITENAME}'
+        - tag: tunnel
+          value: '{#IFNAME}'
+      - uuid: ffb2a9b5f75c4432b5ad1b82381d43fe
+        name: 'SD-WAN [{#SITENAME}] [{#IFNAME}] Tunnel Status'
+        type: SNMP_AGENT
+        snmp_oid: '.1.3.6.1.2.1.2.2.1.8.{#SNMPINDEX}'
+        key: 'sdwan.tunnel.status[{#REMOTEMGMT}]'
+        delay: 1m
+        history: 7d
+        trends: '0'
+        value_type: UNSIGNED
+        description: ifOperStatus of WireGuard tunnel {#IFNAME} to {#SITENAME}. 1=up, 2=down.
+        valuemap:
+          name: IF-MIB::ifOperStatus
+        tags:
+        - tag: component
+          value: sdwan
+        - tag: site
+          value: '{#SITENAME}'
+        - tag: tunnel
+          value: '{#IFNAME}'
+        trigger_prototypes:
+        - uuid: f3986f86307f47acb3b8374a352b7906
+          expression: 'last(/Ubiquiti UniFi SD-WAN Gateway/sdwan.tunnel.status[{#REMOTEMGMT}])<>1'
+          name: 'SD-WAN tunnel {#IFNAME} to {#SITENAME} is down on {HOST.NAME}'
+          priority: HIGH
+          description: WireGuard tunnel {#IFNAME} on {HOST.NAME} to {#SITENAME} is no
+            longer up. If all tunnels to a site are down that site is fully isolated.
+          manual_close: 'YES'
+      - uuid: b9a0cd362daf416680261c521b79a76c
+        name: 'SD-WAN [{#SITENAME}] [{#IFNAME}] Input Error Rate'
+        type: SNMP_AGENT
+        snmp_oid: '.1.3.6.1.2.1.2.2.1.14.{#SNMPINDEX}'
+        key: 'sdwan.tunnel.in.errors[{#REMOTEMGMT}]'
+        delay: 5m
+        history: 7d
+        trends: 90d
+        value_type: FLOAT
+        units: eps
+        description: Rate of inbound errors on tunnel {#IFNAME} to {#SITENAME}.
+        preprocessing:
+        - type: CHANGE_PER_SECOND
+          parameters: []
+        tags:
+        - tag: component
+          value: sdwan
+        - tag: site
+          value: '{#SITENAME}'
+        - tag: tunnel
+          value: '{#IFNAME}'
+      - uuid: ce8e1cc49ce24b9ea28dd22861bc7469
+        name: 'SD-WAN [{#SITENAME}] [{#IFNAME}] Output Error Rate'
+        type: SNMP_AGENT
+        snmp_oid: '.1.3.6.1.2.1.2.2.1.20.{#SNMPINDEX}'
+        key: 'sdwan.tunnel.out.errors[{#REMOTEMGMT}]'
+        delay: 5m
+        history: 7d
+        trends: 90d
+        value_type: FLOAT
+        units: eps
+        description: Rate of outbound errors on tunnel {#IFNAME} to {#SITENAME}.
+        preprocessing:
+        - type: CHANGE_PER_SECOND
+          parameters: []
+        tags:
+        - tag: component
+          value: sdwan
+        - tag: site
+          value: '{#SITENAME}'
+        - tag: tunnel
+          value: '{#IFNAME}'
+      master_item:
+        key: sdwan.snmp.walk.raw
+      lld_macro_paths:
+      - lld_macro: '{#SNMPINDEX}'
+        path: $.ifindex
+      - lld_macro: '{#IFNAME}'
+        path: $.ifname
+      - lld_macro: '{#SITENAME}'
+        path: $.sitename
+      - lld_macro: '{#REMOTEMGMT}'
+        path: $.remotemgmt
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - |
+          // {$SDWAN_NAMEMAP} is set on this host by the seed LLD — a JSON object
+          // mapping every RFC-1918 IP to its human-readable site name.
+          var nameMap = {};
+          try { nameMap = JSON.parse('{$SDWAN_NAMEMAP}'); } catch(e) {}
+          var ifNames = {};
+          var ifAlias = {};
+          var routeMap = {};
+          var lines = value.split('\n');
+          for (var i = 0; i < lines.length; i++) {
+              var line = lines[i].trim();
+              if (!line) continue;
+              var mName = line.match(/^\.1\.3\.6\.1\.2\.1\.31\.1\.1\.1\.1\.(\d+)\s*=\s*STRING:\s*"([^"]*)"/);
+              if (mName) { ifNames[mName[1]] = mName[2].trim(); continue; }
+              var mAlias = line.match(/^\.1\.3\.6\.1\.2\.1\.31\.1\.1\.1\.18\.(\d+)\s*=\s*STRING:\s*"([^"]*)"/);
+              if (mAlias) { ifAlias[mAlias[1]] = mAlias[2].trim(); continue; }
+              var mRoute = line.match(/^\.1\.3\.6\.1\.2\.1\.4\.24\.4\.1\.5\.(\d+)\.(\d+)\.(\d+)\.(\d+)\.255\.255\.255\.0\.\S+\s*=\s*INTEGER:\s*(\d+)/);
+              if (mRoute) {
+                  var d1=mRoute[1], d2=mRoute[2], d3=mRoute[3], ifidx=mRoute[5];
+                  var rkey = d1+'.'+d2+'.'+d3;
+                  if (!routeMap[ifidx]) routeMap[ifidx] = [];
+                  var dup = false;
+                  for (var k=0; k<routeMap[ifidx].length; k++) {
+                      if (routeMap[ifidx][k].key===rkey){dup=true;break;}
+                  }
+                  if (!dup) routeMap[ifidx].push({d1:d1,d2:d2,d3:d3,key:rkey});
+              }
+          }
+          function isRFC1918(d1, d2) {
+              if (d1 === '10') return true;
+              if (d1 === '192' && d2 === '168') return true;
+              var a = parseInt(d1,10), b = parseInt(d2,10);
+              if (a === 172 && b >= 16 && b <= 31) return true;
+              return false;
+          }
+          // Collect candidate tunnel interfaces: SD-WAN alias OR wgsts name pattern.
+          var candidates = {};
+          for (var idx in ifAlias) {
+              if (ifAlias[idx].indexOf('SD-WAN:') === 0) candidates[idx] = true;
+          }
+          for (var idx in ifNames) {
+              if (/^wgsts\d+$/.test(ifNames[idx])) candidates[idx] = true;
+          }
+          // For each candidate interface, group routes by remote network prefix (d1.d2).
+          // One item per physical WireGuard interface. Where one interface carries
+          // traffic to multiple remote sites (e.g. Randles hub via wgsts1003), the
+          // site label lists all connected sites joined with ' + '.
+          var result = [];
+          for (var idx in candidates) {
+              var routes = routeMap[idx] || [];
+              if (routes.length === 0) continue;
+              var ifname = ifNames[idx] || ('wg-'+idx);
+              var seenPrefix = {};
+              var siteNames = [];
+              var firstMgmt = '';
+              for (var r=0; r<routes.length; r++) {
+                  var rt = routes[r];
+                  if (!isRFC1918(rt.d1, rt.d2)) continue;
+                  var prefix = rt.d1+'.'+rt.d2;
+                  if (seenPrefix[prefix]) continue;
+                  var mgmt = rt.d3 === '200'
+                      ? rt.d1+'.'+rt.d2+'.200.1'
+                      : rt.d1+'.'+rt.d2+'.'+rt.d3+'.1';
+                  if (nameMap[mgmt] && nameMap[mgmt] === nameMap['{$GW_IP}']) continue;
+                  seenPrefix[prefix] = true;
+                  siteNames.push(nameMap[mgmt] || mgmt);
+                  if (!firstMgmt) firstMgmt = mgmt;
+              }
+              if (!firstMgmt) continue;
+              result.push({
+                  ifindex: idx,
+                  ifname: ifname,
+                  sitename: siteNames.join(' + '),
+                  remotemgmt: firstMgmt
+              });
+          }
+          return JSON.stringify(result);
+    macros:
+    - macro: '{$SNMP_COMMUNITY}'
+      type: SECRET_TEXT
+      description: SNMPv2c community string. Set automatically via LLD from seed host.
+        Override manually if this site uses a different community (e.g. Randles Family).
+    - macro: '{$GW_IP}'
+      value: ''
+      description: Management IP of this gateway. Set automatically via LLD.
+    - macro: '{$SDWAN_NAMEMAP}'
+      value: '{}'
+      description: JSON map of RFC-1918 IP to site name. Set automatically via LLD
+        from the seed host's UniFi API fetch. Used to label tunnel items.
+    valuemaps:
+    - uuid: 9ece7f1215da48178e8c577cf3046ed8
+      name: IF-MIB::ifOperStatus
+      mappings:
+      - value: '1'
+        newvalue: up
+      - value: '2'
+        newvalue: down
+      - value: '3'
+        newvalue: testing
+      - value: '4'
+        newvalue: unknown
+      - value: '5'
+        newvalue: dormant
+      - value: '6'
+        newvalue: notPresent
+      - value: '7'
+        newvalue: lowerLayerDown

@@ -2547,7 +2547,7 @@ zabbix_export:
       filter:
         conditions:
         - macro: '{#SHORTNAME}'
-          value: USW|US[0-9]|USL|USF|USM
+          value: USW|US[0-9]|USL|USF|USM|USAGG
           operator: MATCHES_REGEX
           formulaid: A
       host_prototypes:
@@ -2882,7 +2882,7 @@ zabbix_export:
           operator: NOT_MATCHES_REGEX
           formulaid: A
         - macro: '{#SHORTNAME}'
-          value: USW|US[0-9]|USL|USF|USM
+          value: USW|US[0-9]|USL|USF|USM|USAGG
           operator: NOT_MATCHES_REGEX
           formulaid: B
         - macro: '{#SHORTNAME}'
