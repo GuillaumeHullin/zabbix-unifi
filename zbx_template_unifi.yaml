@@ -851,8 +851,7 @@ zabbix_export:
       - type: JSONPATH
         parameters:
         - $.health.data[?(@.subsystem=="wan")].status.first()
-        error_handler: CUSTOM_VALUE
-        error_handler_params: unknown
+        error_handler: DISCARD_VALUE
       - type: DISCARD_UNCHANGED_HEARTBEAT
         parameters:
         - 5m
@@ -3907,7 +3906,7 @@ zabbix_export:
         value: uap
       triggers:
       - uuid: a284c526cefe4d14bb5ad82ef30b416d
-        expression: min(/Ubiquiti UniFi UAP/unifi.uap.state,#3)<>1
+        expression: min(/Ubiquiti UniFi UAP/unifi.uap.state,#5)<>1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         description: The local UniFi controller is reporting this device as offline (state ≠ 1). The device may have 
@@ -4245,7 +4244,7 @@ zabbix_export:
           priority: HIGH
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi UAP/unifi.uap.state,#3)<>1
+            expression: min(/Ubiquiti UniFi UAP/unifi.uap.state,#5)<>1
           description: The {#RADIONAME} radio on this access point is not in a running state. Clients on this frequency 
             band will be unable to connect to this AP. A reboot usually recovers a stuck radio; if the issue recurs, the
             AP may need a firmware update or hardware replacement.
@@ -4450,7 +4449,7 @@ zabbix_export:
         value: usw
       triggers:
       - uuid: bbe2ee3a0ab34a9b8e7944f5ee31781c
-        expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+        expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         dependencies:
@@ -4660,7 +4659,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: Switch port {#PORTID} ({#PORTNAME}) has gone down after previously being up - the connected
             device has lost network connectivity. Check the cable, the NIC on the connected device, and PoE status
             if this is a powered port. Resolves immediately if the port comes back up, or automatically after 24
@@ -4757,7 +4756,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: Transmit errors are actively increasing on switch port {#PORTID} ({#PORTNAME}). This typically
             indicates a physical layer issue such as a faulty cable, a duplex mismatch, or a failing NIC on the
             connected device. Replace the cable first as it is the most common cause. Error count resets on device reboot.
@@ -4789,7 +4788,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: Receive errors are actively increasing on switch port {#PORTID} ({#PORTNAME}). Common causes
             include a damaged cable, a failing SFP module, or a faulty NIC on the connected device. Replace the cable
             or SFP first, then investigate the connected device. Error count resets on device reboot.
@@ -4887,7 +4886,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) is reporting a transmit fault. This typically
             indicates a failed or failing laser, a faulty SFP module, or a broken fibre on the TX strand. The
             link will likely be down. Replace the SFP module and check the fibre patch lead.
@@ -4920,7 +4919,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) is reporting a receive fault. This typically
             indicates the RX fibre strand is disconnected, dirty, or broken, or the remote TX laser has failed.
             Check the fibre patch lead and clean both connectors.
@@ -4953,7 +4952,7 @@ zabbix_export:
           priority: HIGH
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) has exceeded the critical temperature
             threshold ({$UNIFI.SFP.TEMP.HIGH}°C). At this temperature optical output power degrades and module
             failure is likely. Ensure the switch has adequate airflow and modules are not blocking ventilation.
@@ -4965,7 +4964,7 @@ zabbix_export:
           priority: WARNING
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) is above the warning temperature threshold
             ({$UNIFI.SFP.TEMP.WARN}°C). Commercial-grade SFP+ modules are typically rated to 70°C. Monitor for
             further increases and check for blocked airflow.
@@ -4999,7 +4998,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: Received optical power on port {#PORTID} ({#PORTNAME}) is critically low
             ({$UNIFI.SFP.RXPOWER.LOW.HIGH} dBm threshold). The link is near receiver sensitivity and bit errors
             are likely. Check for a dirty or damaged fibre connector, excessive bend radius, or a failing
@@ -5013,7 +5012,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: Received optical power on port {#PORTID} ({#PORTNAME}) is below the warning threshold
             ({$UNIFI.SFP.RXPOWER.LOW.WARN} dBm). Signal degradation may cause intermittent errors under load.
             Clean both fibre connectors and check for excessive bend radius or damaged patch leads.
@@ -5047,7 +5046,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: Transmit laser power on port {#PORTID} ({#PORTNAME}) is critically low
             ({$UNIFI.SFP.TXPOWER.LOW.HIGH} dBm threshold). The module laser is likely failing. Plan a
             replacement — a module at this level may be causing signal loss at the far end even if no RX
@@ -5061,7 +5060,7 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#3)<>1
+            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
           description: Transmit laser output on port {#PORTID} ({#PORTNAME}) is below the warning threshold
             ({$UNIFI.SFP.TXPOWER.LOW.WARN} dBm). This may indicate a degrading laser. A continuing drop will
             eventually cause link errors at the far end.
@@ -5248,7 +5247,7 @@ zabbix_export:
         value: ups
       triggers:
       - uuid: af4f82d3a48c4a42b0d2546947357f13
-        expression: min(/Ubiquiti UniFi UPS/unifi.ups.state,#3)<>1
+        expression: min(/Ubiquiti UniFi UPS/unifi.ups.state,#5)<>1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         dependencies:
@@ -5480,7 +5479,7 @@ zabbix_export:
           priority: WARNING
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi UPS/unifi.ups.state,#3)<>1
+            expression: min(/Ubiquiti UniFi UPS/unifi.ups.state,#5)<>1
           description: Outlet {#OUTLETID} ({#OUTLETNAME}) on this UPS is no longer energised. The device connected to 
             this outlet has lost power. Possible causes include an overload trip, a manual disable via the UniFi 
             interface, or a firmware fault. Check the outlet state in UniFi and the load on this outlet.
@@ -5614,7 +5613,7 @@ zabbix_export:
         value: rps
       triggers:
       - uuid: 6a492342ccee4822b11dbfbe9a8a00a8
-        expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#3)<>1
+        expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#5)<>1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         dependencies:
@@ -5906,7 +5905,7 @@ zabbix_export:
             PSU.
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#3)<>1
+            expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#5)<>1
       - uuid: 8bc2cde8e674465aa2040d1404fa90e2
         name: RPS Port {#RPSPORTID} ({#RPSPORTNAME}) Delivering
         type: DEPENDENT
@@ -5957,7 +5956,7 @@ zabbix_export:
           priority: WARNING
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#3)<>1
+            expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#5)<>1
           description: RPS port {#RPSPORTID} ({#RPSPORTNAME}) is no longer connected. The device on this port has no 
             redundant power supply protection - if its primary PSU now fails, it will lose power with no failover. Check
             the RPS cable connection from the RPS unit to the device.
