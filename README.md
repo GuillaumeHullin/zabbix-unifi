@@ -92,13 +92,14 @@ Ubiquiti UniFi API          <- Assign this to a single Zabbix host
 
 The template authenticates to the UniFi Site Manager API using an API key.
 
-1. Log in to [unifi.ui.com](https://unifi.ui.com)
-2. Click your profile icon (top right) and select **API Keys** (or navigate to **Account > API Keys**)
-3. Click **Create API Key**
-4. Give it a descriptive name (e.g. `Zabbix Monitoring`)
-5. Copy the key - it is only shown once
-
-**Required permissions:** The API key inherits the permissions of the account that created it. The account must have at least **Viewer** access to all sites you wish to monitor. A dedicated read-only Ubiquiti account is recommended for production use.
+1. Log in to [unifi.ui.com](https://unifi.ui.com) with an administrator account
+2. In the **left sidebar**, click **API Keys**
+3. Click **Create New API Key**
+4. Enter a descriptive name (e.g. `Zabbix`)
+5. Set an **Expiration** — select **Never Expires** for a long-lived monitoring key, or at minimum **1 Year**
+6. Under **Applications**, ensure both **Site Manager** and **UniFi Applications** are checked
+7. Under **Sites**, select **All Sites** (or restrict to the specific sites you wish to monitor)
+8. Click **Create** and copy the key — it is only shown once
 
 > The API key is passed as an `X-API-KEY` header on all requests to `api.ui.com`. It does not grant access to local controller endpoints.
 
@@ -106,21 +107,25 @@ The template authenticates to the UniFi Site Manager API using an API key.
 
 ### 2. Prepare Local Controller Credentials
 
-Local polling hits each console's UniFi OS controller directly over HTTPS (port 443). A local account with **read-only (Viewer)** permissions is sufficient and recommended.
+Local polling hits each console's UniFi OS controller directly over HTTPS (port 443). A local admin account with **View Only** permissions is sufficient and recommended.
 
 **To create a local read-only account:**
 
-1. Log in to the UniFi OS console web UI (e.g. `https://10.1.1.1`)
-2. Navigate to **Settings > Admins & Users**
-3. Click **Add Admin**
-4. Set the role to **Viewer** (read-only)
-5. Note the username and password
+1. Log in to [unifi.ui.com](https://unifi.ui.com) and open the **Network** app for the site, or navigate directly to the console's IP address (e.g. `https://10.1.1.1`) — the steps are identical either way
+2. In the **left sidebar**, click the **People** icon (the group icon near the bottom of the sidebar)
+3. Click **Create New** → **Create New User**
+4. Enter a **First Name** and **Last Name** for the account (e.g. `Zabbix` / `Monitor`) — email is not required
+5. Check the **Admin** checkbox — this reveals **Username**, **Password**, and role fields
+6. Enter a username (e.g. `zabbix-viewonly`) and a strong password; leave **Super Admin** unchecked
+7. Set both role dropdowns to **View Only**
+8. Leave **Groups** empty — no group membership is needed
+9. In the **Assignments** section, **uncheck** both **Network** and **One-Click VPN** — these control cloud/Fabric app access, which a local monitoring account does not need
+10. Click **Create**
 
-The account must exist on **each console** you want to poll locally. If you use a Ubiquiti SSO account linked to the console, the same credentials work - but a dedicated local account avoids dependency on cloud authentication.
+Repeat this process for each console you wish to monitor locally. The account credentials are entered as Zabbix macros in [Step 7](#7-configure-per-host-macros).
 
 **Permissions required:**
-- Read access to the Network application (devices, health, port stats)
-- Read access to UniFi OS system stats (gateway CPU/memory/temperature)
+- View Only access to the Network application (devices, health, port stats)
 
 No write permissions are needed or recommended.
 
