@@ -107,7 +107,7 @@ Ubiquiti UniFi API          <- Assign this to a single Zabbix host
         +-------------------------------------------------------+
         |  Console host (1x per console, every 1m)               |
         |    GET /v1/hosts/{hostId}    -> unifi.api.hosts        |
-        |    GET /v1/devices?hostId=X  -> unifi.api.host.devices |
+        |    GET /v1/devices?hostId=X  -> unifi.host.session |
         |    GET /v1/sites?hostIds=X   -> unifi.api.host.sites   |
         +-------------------------------------------------------+
                                     |
@@ -123,23 +123,43 @@ Ubiquiti UniFi API          <- Assign this to a single Zabbix host
                     Local controller (per console, HTTPS 443)
                                     |
         +-------------------------------------------------------+
-        |  Console host (1x per console, every 3m)               |
-        |    POST /api/auth/login                                |
+        |  Console host (1x per console) - the ONLY thing that   |
+        |  logs in under normal operation                        |
+        |    POST /api/auth/login  (session token)                |
+        |    GET  /v1/devices?hostId=X  (cloud, as before)        |
+        |      --> unifi.host.session                        |
+        |    every {$UNIFI.SESSION.REFRESH.INTERVAL}, default 10m |
+        +-------------------------------------------------------+
+                                    |
+                     (CALCULATED item reads this item's last
+                      stored value via last(//unifi.host.session)
+                      - does NOT trigger a new poll of it, so the
+                      two schedules are fully independent)
+                                    v
+        +-------------------------------------------------------+
+        |  Console host (1x per console) - own fast schedule,    |
+        |  no login of its own unless the cached token is stale  |
         |    GET  /proxy/network/api/s/default/stat/health       |
         |    GET  /proxy/network/api/s/default/stat/device       |
         |    GET  /proxy/network/api/s/default/rest/.../shadow   |
         |    GET  /api/system                                    |
         |      --> unifi.local.all                                |
+        |    every {$UNIFI.CONSOLE.POLL.INTERVAL}, default 3m     |
+        |    (safe to set much lower, e.g. 10s, for fast WAN/     |
+        |    health telemetry - login frequency is unaffected)    |
         +-------------------------------------------------------+
                                     |
-                     (each device independently logs in and
-                      re-fetches the same device list)
+                     (token also propagated to every device via
+                      {$UNIFI.SESSION.TOKEN} - same mechanism
+                      already used for LOCAL.IP/USERNAME/PASSWORD)
                                     v
         +-------------------------------------------------------+
         |  Per-device host (UAP / USW / UPS / RPS template)      |
-        |    POST /api/auth/login + GET .../stat/device           |
+        |    GET .../stat/device using the cached token - no      |
+        |    login, unless the token is rejected (see below)      |
         |      --> unifi.uap.device / usw.device /                |
         |          ups.device / rps.device                        |
+        |    every {$UNIFI.LOCAL.POLL.INTERVAL}, default 2m       |
         +-------------------------------------------------------+
                                     |
                      DEPENDENT items only from here down
@@ -150,13 +170,20 @@ Ubiquiti UniFi API          <- Assign this to a single Zabbix host
         further API calls.
 ```
 
-**Known limitation: redundant local/cloud calls per device.** Every device host (AP/switch/UPS/RPS) logs into the local controller and fetches the cloud `/v1/devices` list itself, even though its own console already pulled that exact data for its own metrics. On a console with 12 devices that's 12+ separate logins hitting the same controller every cycle, and we've seen it actually trip UniFi's local rate limit in testing (10 concurrent logins to a real console came back `429` on 7 of them).
+**Local controller logins: fixed.** Every device host used to log into the local controller itself, every cycle, and `unifi.local.all` did too, independently - on a console with 12 devices that's 12+ separate logins hitting the same controller, and it actually tripped UniFi's local rate limit in testing (10 concurrent logins to a real console came back `429` on 7 of them). Now there's exactly **one** thing that logs in under normal operation: `unifi.host.session`, on its own slow schedule (`{$UNIFI.SESSION.REFRESH.INTERVAL}`, default 10m). Everything else reads that cached token instead of logging in itself:
 
-We looked at fixing this properly, twice. The first idea was having each device pull the console's already-fetched data instead of re-fetching it, but Zabbix won't allow it: `DEPENDENT` items require the master item to be on the same host, and `CALCULATED` items need a literal host name baked into the formula at save time, before macros are even resolved. Since console and device host names only exist once LLD discovers them, there's no way to point at a "future" host from a formula. The second idea was smaller: merge each device's local and cloud raw items into one, purely to cut Zabbix item count. That's technically possible, but it doesn't reduce a single actual HTTP request (still one login, one local fetch, one cloud fetch, whichever item they're wrapped in), and it would couple two failure modes that are usefully independent today. Not worth it.
+- Devices get it via `{$UNIFI.SESSION.TOKEN}`, the same LLD mechanism that already carries `{$UNIFI.LOCAL.IP}`/`{$UNIFI.USERNAME}`/`{$UNIFI.PASSWORD}` from console to device.
+- `unifi.local.all` gets it via a `CALCULATED` item formula, `last(//unifi.host.session)`, which reads `unifi.host.session`'s most recently stored value *without* triggering a new poll of it. This is what actually makes fast+independent WAN/health polling possible: `unifi.local.all` runs on its own schedule (`{$UNIFI.CONSOLE.POLL.INTERVAL}`, default 3m, safe to drop to something like `10s` if you want responsive WAN telemetry) with zero effect on how often the console actually logs in. A `DEPENDENT` item couldn't do this - it would tie `unifi.local.all` to `unifi.host.session`'s slow schedule - and there's no way for an item to write a macro back onto its own host, so `CALCULATED` + `last()` is the one native mechanism that decouples the two.
 
-The only way to genuinely eliminate the redundant calls is a bigger change: turning per-device metrics into LLD item prototypes that live on the console host, instead of giving each device its own Zabbix host. That's a real architecture change, not a drop-in fix, so it's parked rather than attempted here.
+Both consumers fall back to a one-off fresh login, just for that one poll, if their cached token is ever missing or rejected (console reboot, a missed refresh cycle) - self-healing immediately rather than waiting on the next scheduled refresh.
 
-None of this causes bad alerting, though. A rate-limited or failed local poll is just skipped rather than misread as "offline" (see [Troubleshooting](#troubleshooting)), so the cost of this limitation is some wasted controller load, not false alarms.
+`{$UNIFI.SESSION.REFRESH.INTERVAL}`'s `10m` default is deliberately conservative rather than cut close to the session token's ~2 hour lifetime: the login itself is cheap (O(1) per console regardless of device count), but the exact trigger for UniFi's local rate limiting isn't fully characterized - testing confirmed it's tripped by concurrent logins, but a rolling per-time-window limit hasn't been ruled out, so refreshing every 10 minutes rather than every 1 keeps total login attempts an order of magnitude lower for no real cost (still a 12x safety margin against the token's own expiry, and new/renamed devices - discovered via this same item's cloud fetch - just take up to 10 minutes to show up instead of 1).
+
+All three poll intervals - `{$UNIFI.LOCAL.POLL.INTERVAL}` (per-device), `{$UNIFI.CONSOLE.POLL.INTERVAL}` (`unifi.local.all`), and `{$UNIFI.SESSION.REFRESH.INTERVAL}` (`unifi.host.session`) - flow through the same chain as `{$UNIFI.USERNAME}`/`{$UNIFI.PASSWORD}`: one real default on the root `Ubiquiti UniFi API` template, propagated to every console, and for the per-device one, propagated again from each console to its devices - so any of them can be changed once at the root for everything, or overridden at the console or device level. Unlike the credential macros, every tier this passes through also keeps its own real fallback value (matching the ordinary threshold macros like `{$UNIFI.CPU.USAGE.WARN}`), not just the root: an empty *credential* just fails a login cleanly, but an empty polling *interval* is a hard Zabbix configuration error (`Invalid update interval ""`), so there's always something valid to fall back to for the brief window before a freshly-imported host's discovery chain has fully propagated a real value down to it.
+
+**Known limitation: redundant cloud calls per device.** Every device host still fetches the cloud `/v1/devices` list itself (`unifi.api.device.raw`), even though its own console already pulled that exact data. This is a smaller-impact limitation than the local logins above - cloud API calls aren't subject to the same aggressive rate limiting UniFi applies to local logins, so it hasn't caused practical problems the way local logins did. The same structural blocker applies here, with one nuance: `CALCULATED` items *can* read another item's last value without polling it (that's exactly what `unifi.local.all` now does, above) - but only from a host they can name, and the only host-naming options are a literal hostname or an empty host slot meaning "myself." Neither works across the console→device boundary, since a device can't hardcode its own dynamically-discovered console's hostname, and "myself" isn't the console. `DEPENDENT` items have the same problem: the master must be on the same host. The only way to genuinely eliminate this one is turning per-device metrics into LLD item prototypes living on the console host instead of giving each device its own Zabbix host - a real architecture change, parked rather than attempted here.
+
+None of this causes bad alerting. A rate-limited or failed poll (local or cloud) is just skipped rather than misread as "offline" (see [Troubleshooting](#troubleshooting)).
 
 ---
 
@@ -309,6 +336,9 @@ Common optional overrides:
 | `{$APIKEY}` | *(secret)* | UniFi Site Manager API key |
 | `{$UNIFI.USERNAME}` | *(empty)* | Default local controller username, propagated to every discovered console - see [Step 5](#5-configure-host-macros) |
 | `{$UNIFI.PASSWORD}` | *(secret)* | Default local controller password, propagated to every discovered console |
+| `{$UNIFI.LOCAL.POLL.INTERVAL}` | `2m` | Default per-device local poll interval, propagated to every discovered console and then on to every device - override at any tier (root, console, or device). Not a secret, so unlike username/password the real default lives directly on this template rather than requiring a root host override |
+| `{$UNIFI.CONSOLE.POLL.INTERVAL}` | `3m` | Default interval for each console's own combined local poll (`Local Raw (Combined)`, a `CALCULATED` item), propagated to every discovered console - override at the root or per-console. Safe to set much lower (e.g. `10s`) for fast WAN/health telemetry - this item doesn't log in itself, so its speed has no effect on login frequency (see [Polling Architecture](#polling-architecture)) |
+| `{$UNIFI.SESSION.REFRESH.INTERVAL}` | `10m` | Default interval for each console's session-token mint + cloud device fetch (`Local Session + Cloud Devices Raw`), propagated to every discovered console - override at the root or per-console. Deliberately conservative rather than cut close to the ~2 hour session token lifetime: the login is cheap either way, but UniFi's local rate limiter is only confirmed to trigger on concurrent logins, not proven safe against a sustained per-minute rate too, so this keeps total login attempts low regardless |
 | `{$WAN_UPTIME_WARN}` | `99` | Site-wide combined WAN uptime AVERAGE threshold (%) |
 | `{$WAN_UPTIME_HIGH}` | `95` | Site-wide combined WAN uptime DISASTER threshold (%) |
 | `{$UNIFI.SITE.EXCLUDE}` | *(empty)* | Comma-separated consoles to exclude from discovery, see [Site Discovery Filtering](#site-discovery-filtering) |
@@ -325,6 +355,9 @@ Common optional overrides:
 | `{$UNIFI.API.AUTH.TOKEN}` | `TOKEN` | Session cookie name |
 | `{$UNIFI.API.URI}` | `proxy/network/api/s/default/stat` | Stats endpoint |
 | `{$UNIFI.API.REST.URI}` | `proxy/network/api/s/default/rest` | REST endpoint |
+| `{$UNIFI.LOCAL.POLL.INTERVAL}` | *(auto)* | Local poll interval - inherited from the root host's default at discovery time, or overridden here for every device on this console |
+| `{$UNIFI.CONSOLE.POLL.INTERVAL}` | *(auto)* | Console combined local poll interval - inherited from the root host's default at discovery time, or overridden here |
+| `{$UNIFI.SESSION.REFRESH.INTERVAL}` | *(auto)* | Session-token refresh interval - inherited from the root host's default at discovery time, or overridden here |
 | `{$HOSTID}` | *(auto)* | Console UUID from cloud - set by discovery |
 | `{$BACKUP_INTERVAL}` | `8d` | Expected maximum time between backups |
 | `{$WAN_UPTIME_NOTICE}` | `99.9` | Per-WAN 24h availability WARNING threshold (%), about 1.4 min/day |
@@ -683,6 +716,6 @@ No additional configuration is required - HA status is detected automatically fr
 - Acknowledge and close the alarm in Zabbix once the underlying issue is resolved
 
 **HTTP 429 errors from the local controller**
-- Every device host logs into the local controller independently (see [Polling Architecture](#polling-architecture) for why), so a console with many devices can occasionally trip UniFi's own local rate limiting
-- This no longer causes false "offline" alarms: a rate-limited poll is simply skipped rather than misread as the device being down, so a `429` on its own is not something you need to act on
-- If they're frequent enough to worry about, the only real fix is reducing how many devices share one console, or increasing the local poll interval (default 3 minutes) on the affected device templates
+- Device hosts no longer log in themselves (see [Polling Architecture](#polling-architecture)), so this should be rare. The only thing that logs in under normal operation is `Local Session + Cloud Devices Raw` (`unifi.host.session`), on its own `{$UNIFI.SESSION.REFRESH.INTERVAL}` schedule (default 10m). `unifi.local.all` doesn't log in routinely at all - it only does a one-off fresh login itself if its cached token turns out to be rejected
+- A rate-limited or failed poll is simply skipped rather than misread as the device being down, so an occasional `429` is not something you need to act on
+- If a device's cached `{$UNIFI.SESSION.TOKEN}` is ever rejected, that device performs one fresh login itself to recover the same cycle - a burst of these across many devices at once would point at the console-level token propagation being broken (check `Local Session + Cloud Devices Raw` under **Monitoring > Latest data**) rather than the per-device rate limit itself

@@ -25,7 +25,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.1.0.1
+      Version: 1.2.0
     groups:
     - name: Templates
     items:
@@ -34,7 +34,7 @@ zabbix_export:
       type: HTTP_AGENT
       key: unifi.api.hosts
       delay: 1m
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       url: https://api.ui.com/v1/hosts
@@ -52,7 +52,7 @@ zabbix_export:
       type: HTTP_AGENT
       key: unifi.sdwan.configs
       delay: 1m
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       url: https://api.ui.com/v1/sd-wan-configs
@@ -95,6 +95,10 @@ zabbix_export:
         - macro: '{$UNIFI.LOCAL.IP}'
           value: '{#LOCALIP}'
           description: Local management IP of this console (e.g. 10.183.200.1)
+        - macro: '{$APIKEY}'
+          value: '{#APIKEY}'
+          description: UniFi Site Manager API key, inherited from the root host's default at discovery time
+          type: SECRET_TEXT
         - macro: '{$UNIFI.USERNAME}'
           value: '{#USERNAME}'
           description: Local controller username, inherited from the root host's default at discovery time
@@ -102,6 +106,15 @@ zabbix_export:
           value: '{#PASSWORD}'
           description: Local controller password, inherited from the root host's default at discovery time
           type: SECRET_TEXT
+        - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+          value: '{#POLLINTERVAL}'
+          description: Local poll interval, inherited from the root host's default at discovery time
+        - macro: '{$UNIFI.CONSOLE.POLL.INTERVAL}'
+          value: '{#CONSOLEPOLLINTERVAL}'
+          description: Console combined local poll interval, inherited from the root host's default at discovery time
+        - macro: '{$UNIFI.SESSION.REFRESH.INTERVAL}'
+          value: '{#SESSIONREFRESHINTERVAL}'
+          description: Console session-token refresh interval, inherited from the root host's default at discovery time
         custom_interfaces: 'YES'
         interfaces:
         - ip: '{#LOCALIP}'
@@ -116,12 +129,20 @@ zabbix_export:
         path: $..reportedState.hostname.first()
       - lld_macro: '{#LOCALIP}'
         path: $.localIp
+      - lld_macro: '{#APIKEY}'
+        path: $.apikey
       - lld_macro: '{#SITENAME}'
         path: $.siteName
       - lld_macro: '{#USERNAME}'
         path: $.username
       - lld_macro: '{#PASSWORD}'
         path: $.password
+      - lld_macro: '{#POLLINTERVAL}'
+        path: $.pollInterval
+      - lld_macro: '{#CONSOLEPOLLINTERVAL}'
+        path: $.consolePollInterval
+      - lld_macro: '{#SESSIONREFRESHINTERVAL}'
+        path: $.sessionRefreshInterval
       preprocessing:
       - type: JSONPATH
         parameters:
@@ -169,8 +190,12 @@ zabbix_export:
               var siteName = hostname.replace(/-SC-[0-9]+$/, '').replace(/-CGU$/, '');
               obj[i].siteName = siteName || hostname;
               // Propagate the root host's default local credentials to each discovered console
+              obj[i].apikey = '{$APIKEY}';
               obj[i].username = '{$UNIFI.USERNAME}';
               obj[i].password = '{$UNIFI.PASSWORD}';
+              obj[i].pollInterval = '{$UNIFI.LOCAL.POLL.INTERVAL}';
+              obj[i].consolePollInterval = '{$UNIFI.CONSOLE.POLL.INTERVAL}';
+              obj[i].sessionRefreshInterval = '{$UNIFI.SESSION.REFRESH.INTERVAL}';
               delete obj[i].reportedState.controllers;
               delete obj[i].features;
               delete obj[i].userData;
@@ -219,6 +244,24 @@ zabbix_export:
       type: SECRET_TEXT
       description: Default local controller password, propagated to every discovered console unless overridden on that
         console's own host. Set this here (not on the template) so it survives re-importing the template.
+    - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      value: 2m
+      description: Default per-device local poll interval, propagated to every discovered console and then on to every
+        device, unless overridden at the console or device level. Not a secret, so (unlike username/password) the real
+        default lives here on the template rather than requiring a root host override.
+    - macro: '{$UNIFI.CONSOLE.POLL.INTERVAL}'
+      value: 3m
+      description: Default interval for the console's own combined local poll ("Local Raw (Combined)"), propagated to
+        every discovered console unless overridden on that console's own host.
+    - macro: '{$UNIFI.SESSION.REFRESH.INTERVAL}'
+      value: 10m
+      description: 'Default interval for the console''s session-token mint + cloud device fetch ("Local Session + Cloud
+        Devices Raw"), propagated to every discovered console unless overridden on that console''s own host. Deliberately far below the
+        ~2 hour session token lifetime (a 12x margin) - the login this item performs is O(1) per console regardless of
+        device count, so more frequent refreshes are cheap, but the exact conditions that trip UniFi''s local rate limiter
+        aren''t fully known (confirmed concurrent-login-based; a rolling per-time-window limit hasn''t been ruled out), so
+        this stays conservative rather than refreshing every minute just because the login itself is cheap. The trade-off:
+        new/renamed devices take up to this long to be reflected, since this item''s cloud fetch also drives discovery.'
     - macro: '{$WAN_UPTIME_WARN}'
       value: '99'
       description: 'WAN uptime % below which AVERAGE alert fires (default: 99%)'
@@ -244,7 +287,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.1.0.1
+      Version: 1.2.0
     groups:
     - name: Templates
     items:
@@ -669,7 +712,7 @@ zabbix_export:
       type: HTTP_AGENT
       key: unifi.api.host.sites
       delay: 1m
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       url: https://api.ui.com/v1/sites?hostIds={$HOSTID}
@@ -683,46 +726,11 @@ zabbix_export:
       - tag: component
         value: raw
     - uuid: 122dd6a2e28a4f22b897feb716fe026d
-      name: 'Unifi API Raw: Devices'
+      name: 'Local Session + Cloud Devices Raw'
       type: HTTP_AGENT
-      key: unifi.api.host.devices
-      delay: 1m
-      history: '0'
-      value_type: TEXT
-      trends: '0'
-      url: https://api.ui.com/v1/devices?hostId={$HOSTID}
-      timeout: 15s
-      headers:
-      - name: Accept
-        value: application/json
-      - name: x-api-key
-        value: '{$APIKEY}'
-      tags:
-      - tag: component
-        value: raw
-    - uuid: 6a8a3df76868425f95f7bac84319e26d
-      name: 'Unifi API Raw: Hosts'
-      type: HTTP_AGENT
-      key: unifi.api.hosts
-      history: '0'
-      value_type: TEXT
-      trends: '0'
-      url: https://api.ui.com/v1/hosts/{$HOSTID}
-      timeout: 15s
-      headers:
-      - name: Accept
-        value: application/json
-      - name: x-api-key
-        value: '{$APIKEY}'
-      tags:
-      - tag: component
-        value: raw
-    - uuid: 0603751250184046947aebb8a7f8c9c1
-      name: Local Raw (Combined)
-      type: HTTP_AGENT
-      key: unifi.local.all
-      delay: 3m
-      history: '0'
+      key: unifi.host.session
+      delay: '{$UNIFI.SESSION.REFRESH.INTERVAL}'
+      history: 1h
       value_type: TEXT
       trends: '0'
       url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}
@@ -743,26 +751,110 @@ zabbix_export:
         - |
           try {
               var token = value;
-              var base = 'https://{$UNIFI.LOCAL.IP}';
               var req = new HttpRequest();
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + token);
-              var health = req.get(base + '/{$UNIFI.API.URI}/health');
-              if (req.getStatus() !== 200) throw 'health HTTP ' + req.getStatus();
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + token);
-              var device = req.get(base + '/{$UNIFI.API.URI}/device');
-              if (req.getStatus() !== 200) throw 'device HTTP ' + req.getStatus();
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + token);
-              var shadow = req.get(base + '/{$UNIFI.API.REST.URI}/setting/shadow_mode');
-              if (req.getStatus() !== 200) shadow = '{"data":[{}]}';
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + token);
-              var system = req.get(base + '/api/system');
-              if (req.getStatus() !== 200) system = '{"portStatus":[]}';
-              return JSON.stringify({
-                  health: JSON.parse(health),
-                  device: JSON.parse(device),
-                  shadow: JSON.parse(shadow),
-                  system: JSON.parse(system)
-              });
+              req.addHeader('Accept: application/json');
+              req.addHeader('x-api-key: {$APIKEY}');
+              var resp = req.get('https://api.ui.com/v1/devices?hostId={$HOSTID}');
+              if (req.getStatus() !== 200) throw 'cloud HTTP ' + req.getStatus();
+              var cloud = JSON.parse(resp);
+              cloud.token = token;
+              return JSON.stringify(cloud);
+          } catch(e) {
+              Zabbix.log(4, '[UniFi host.session] ' + e);
+              throw e;
+          }
+      tags:
+      - tag: component
+        value: raw
+    - uuid: 6a8a3df76868425f95f7bac84319e26d
+      name: 'Unifi API Raw: Hosts'
+      type: HTTP_AGENT
+      key: unifi.api.hosts
+      history: 1h
+      value_type: TEXT
+      trends: '0'
+      url: https://api.ui.com/v1/hosts/{$HOSTID}
+      timeout: 15s
+      headers:
+      - name: Accept
+        value: application/json
+      - name: x-api-key
+        value: '{$APIKEY}'
+      tags:
+      - tag: component
+        value: raw
+    - uuid: 0603751250184046947aebb8a7f8c9c1
+      name: Local Raw (Combined)
+      type: CALCULATED
+      key: unifi.local.all
+      delay: '{$UNIFI.CONSOLE.POLL.INTERVAL}'
+      history: 1h
+      value_type: TEXT
+      trends: '0'
+      params: last(//unifi.host.session)
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - |
+          try {
+              var base = 'https://{$UNIFI.LOCAL.IP}';
+              var token = null;
+
+              try {
+                  var cached = JSON.parse(value);
+                  if (!cached || !cached.token) throw 'no cached token yet';
+                  token = cached.token;
+              } catch (e) {
+                  token = null;
+              }
+
+              function fetchAll(tok) {
+                  var req = new HttpRequest();
+                  req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + tok);
+                  var health = req.get(base + '/{$UNIFI.API.URI}/health');
+                  if (req.getStatus() !== 200) throw 'health HTTP ' + req.getStatus();
+                  req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + tok);
+                  var device = req.get(base + '/{$UNIFI.API.URI}/device');
+                  if (req.getStatus() !== 200) throw 'device HTTP ' + req.getStatus();
+                  req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + tok);
+                  var shadow = req.get(base + '/{$UNIFI.API.REST.URI}/setting/shadow_mode');
+                  if (req.getStatus() !== 200) shadow = '{"data":[{}]}';
+                  req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + tok);
+                  var system = req.get(base + '/api/system');
+                  if (req.getStatus() !== 200) system = '{"portStatus":[]}';
+                  return {
+                      health: JSON.parse(health),
+                      device: JSON.parse(device),
+                      shadow: JSON.parse(shadow),
+                      system: JSON.parse(system)
+                  };
+              }
+
+              var result;
+              try {
+                  if (!token) throw 'no cached token available yet';
+                  result = fetchAll(token);
+              } catch (e) {
+                  // Cached token (from unifi.host.session's own slow refresh cycle) is
+                  // missing or rejected - log in fresh, just for this one poll.
+                  Zabbix.log(4, '[UniFi local.all] cached token rejected (' + e + '), requesting a fresh one');
+
+                  var loginReq = new HttpRequest();
+                  loginReq.addHeader('Content-Type: application/json');
+                  loginReq.post(base + '/{$UNIFI.API.AUTH.URI}',
+                      JSON.stringify({username: '{$UNIFI.USERNAME}', password: '{$UNIFI.PASSWORD}'}));
+                  if (loginReq.getStatus() !== 200) throw 'fresh login HTTP ' + loginReq.getStatus();
+
+                  var headers = loginReq.getHeaders();
+                  var setCookie = null;
+                  for (var h in headers) { if (h.toLowerCase() === 'set-cookie') { setCookie = headers[h]; break; } }
+                  var m = setCookie && setCookie.match(/{$UNIFI.API.AUTH.TOKEN}=([^;]+);/);
+                  if (!m) throw 'fresh login: no token in response headers';
+
+                  result = fetchAll(m[1]);
+              }
+
+              return JSON.stringify(result);
           } catch(e) {
               Zabbix.log(4, '[UniFi local.all] ' + e);
               throw e;
@@ -1180,7 +1272,7 @@ zabbix_export:
       type: DEPENDENT
       key: unifi.local.gw.device
       delay: '0'
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       preprocessing:
@@ -1304,7 +1396,7 @@ zabbix_export:
       type: DEPENDENT
       key: unifi.local.shadow
       delay: '0'
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       preprocessing:
@@ -1385,7 +1477,7 @@ zabbix_export:
       type: DEPENDENT
       key: unifi.local.system
       delay: '0'
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       preprocessing:
@@ -3230,11 +3322,18 @@ zabbix_export:
         - macro: '{$UNIFI.PASSWORD}'
           value: '{#PASSWORD}'
           description: Local controller password (inherited from gateway)
+        - macro: '{$UNIFI.SESSION.TOKEN}'
+          value: '{#SESSIONTOKEN}'
+          description: Cached local controller session token (inherited from gateway)
+          type: SECRET_TEXT
+        - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+          value: '{#POLLINTERVAL}'
+          description: Local poll interval (inherited from gateway)
         custom_interfaces: 'YES'
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.api.host.devices
+        key: unifi.host.session
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -3260,6 +3359,10 @@ zabbix_export:
         path: $.password
       - lld_macro: '{#SITENAME}'
         path: $.siteName
+      - lld_macro: '{#SESSIONTOKEN}'
+        path: $.sessionToken
+      - lld_macro: '{#POLLINTERVAL}'
+        path: $.pollInterval
       preprocessing:
       - type: JAVASCRIPT
         parameters:
@@ -3269,6 +3372,8 @@ zabbix_export:
           var localIp = '{$UNIFI.LOCAL.IP}';
           var username = '{$UNIFI.USERNAME}';
           var password = '{$UNIFI.PASSWORD}';
+          var token = d.token;
+          var pollInterval = '{$UNIFI.LOCAL.POLL.INTERVAL}';
           var rec = null;
           for (var i = 0; i < d.data.length; i++) {
               if (d.data[i].hostId === hostId) { rec = d.data[i]; break; }
@@ -3280,6 +3385,8 @@ zabbix_export:
               devices[j].localIp = localIp;
               devices[j].username = username;
               devices[j].password = password;
+              devices[j].sessionToken = token;
+              devices[j].pollInterval = pollInterval;
               devices[j].deviceIp = devices[j].ip || '';
               devices[j].shortname = devices[j].shortname || devices[j].model || '';
               devices[j].siteName = '{$SITENAME}';
@@ -3340,11 +3447,18 @@ zabbix_export:
         - macro: '{$UNIFI.PASSWORD}'
           value: '{#PASSWORD}'
           description: Local controller password (inherited from gateway)
+        - macro: '{$UNIFI.SESSION.TOKEN}'
+          value: '{#SESSIONTOKEN}'
+          description: Cached local controller session token (inherited from gateway)
+          type: SECRET_TEXT
+        - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+          value: '{#POLLINTERVAL}'
+          description: Local poll interval (inherited from gateway)
         custom_interfaces: 'YES'
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.api.host.devices
+        key: unifi.host.session
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -3370,6 +3484,10 @@ zabbix_export:
         path: $.password
       - lld_macro: '{#SITENAME}'
         path: $.siteName
+      - lld_macro: '{#SESSIONTOKEN}'
+        path: $.sessionToken
+      - lld_macro: '{#POLLINTERVAL}'
+        path: $.pollInterval
       preprocessing:
       - type: JAVASCRIPT
         parameters:
@@ -3379,6 +3497,8 @@ zabbix_export:
           var localIp = '{$UNIFI.LOCAL.IP}';
           var username = '{$UNIFI.USERNAME}';
           var password = '{$UNIFI.PASSWORD}';
+          var token = d.token;
+          var pollInterval = '{$UNIFI.LOCAL.POLL.INTERVAL}';
           var rec = null;
           for (var i = 0; i < d.data.length; i++) {
               if (d.data[i].hostId === hostId) { rec = d.data[i]; break; }
@@ -3390,6 +3510,8 @@ zabbix_export:
               devices[j].localIp = localIp;
               devices[j].username = username;
               devices[j].password = password;
+              devices[j].sessionToken = token;
+              devices[j].pollInterval = pollInterval;
               devices[j].deviceIp = devices[j].ip || '';
               devices[j].shortname = devices[j].shortname || devices[j].model || '';
               devices[j].siteName = '{$SITENAME}';
@@ -3450,11 +3572,18 @@ zabbix_export:
         - macro: '{$UNIFI.PASSWORD}'
           value: '{#PASSWORD}'
           description: Local controller password (inherited from gateway)
+        - macro: '{$UNIFI.SESSION.TOKEN}'
+          value: '{#SESSIONTOKEN}'
+          description: Cached local controller session token (inherited from gateway)
+          type: SECRET_TEXT
+        - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+          value: '{#POLLINTERVAL}'
+          description: Local poll interval (inherited from gateway)
         custom_interfaces: 'YES'
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.api.host.devices
+        key: unifi.host.session
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -3480,6 +3609,10 @@ zabbix_export:
         path: $.password
       - lld_macro: '{#SITENAME}'
         path: $.siteName
+      - lld_macro: '{#SESSIONTOKEN}'
+        path: $.sessionToken
+      - lld_macro: '{#POLLINTERVAL}'
+        path: $.pollInterval
       preprocessing:
       - type: JAVASCRIPT
         parameters:
@@ -3489,6 +3622,8 @@ zabbix_export:
           var localIp = '{$UNIFI.LOCAL.IP}';
           var username = '{$UNIFI.USERNAME}';
           var password = '{$UNIFI.PASSWORD}';
+          var token = d.token;
+          var pollInterval = '{$UNIFI.LOCAL.POLL.INTERVAL}';
           var rec = null;
           for (var i = 0; i < d.data.length; i++) {
               if (d.data[i].hostId === hostId) { rec = d.data[i]; break; }
@@ -3500,6 +3635,8 @@ zabbix_export:
               devices[j].localIp = localIp;
               devices[j].username = username;
               devices[j].password = password;
+              devices[j].sessionToken = token;
+              devices[j].pollInterval = pollInterval;
               devices[j].deviceIp = devices[j].ip || '';
               devices[j].shortname = devices[j].shortname || devices[j].model || '';
               devices[j].siteName = '{$SITENAME}';
@@ -3560,11 +3697,18 @@ zabbix_export:
         - macro: '{$UNIFI.PASSWORD}'
           value: '{#PASSWORD}'
           description: Local controller password (inherited from gateway)
+        - macro: '{$UNIFI.SESSION.TOKEN}'
+          value: '{#SESSIONTOKEN}'
+          description: Cached local controller session token (inherited from gateway)
+          type: SECRET_TEXT
+        - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+          value: '{#POLLINTERVAL}'
+          description: Local poll interval (inherited from gateway)
         custom_interfaces: 'YES'
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.api.host.devices
+        key: unifi.host.session
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -3590,6 +3734,10 @@ zabbix_export:
         path: $.password
       - lld_macro: '{#SITENAME}'
         path: $.siteName
+      - lld_macro: '{#SESSIONTOKEN}'
+        path: $.sessionToken
+      - lld_macro: '{#POLLINTERVAL}'
+        path: $.pollInterval
       preprocessing:
       - type: JAVASCRIPT
         parameters:
@@ -3599,6 +3747,8 @@ zabbix_export:
           var localIp = '{$UNIFI.LOCAL.IP}';
           var username = '{$UNIFI.USERNAME}';
           var password = '{$UNIFI.PASSWORD}';
+          var token = d.token;
+          var pollInterval = '{$UNIFI.LOCAL.POLL.INTERVAL}';
           var rec = null;
           for (var i = 0; i < d.data.length; i++) {
               if (d.data[i].hostId === hostId) { rec = d.data[i]; break; }
@@ -3610,6 +3760,8 @@ zabbix_export:
               devices[j].localIp = localIp;
               devices[j].username = username;
               devices[j].password = password;
+              devices[j].sessionToken = token;
+              devices[j].pollInterval = pollInterval;
               devices[j].deviceIp = devices[j].ip || '';
               devices[j].shortname = devices[j].shortname || devices[j].model || '';
               devices[j].siteName = '{$SITENAME}';
@@ -3684,7 +3836,7 @@ zabbix_export:
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.api.host.devices
+        key: unifi.host.session
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -3929,6 +4081,22 @@ zabbix_export:
       type: SECRET_TEXT
       description: Local controller password - inherited from the root host's default at discovery time, or set here
         to override for this specific console
+    - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      value: 2m
+      description: Local poll interval - normally inherited from the root host's default at discovery time, or set here
+        to override for every device on this specific console. This value is only a fallback for before the first discovery
+        cycle populates the real one; not a secret, so (unlike username/password) it's safe to give it a real default here.
+    - macro: '{$UNIFI.CONSOLE.POLL.INTERVAL}'
+      value: 3m
+      description: Console combined local poll interval ("Local Raw (Combined)") - normally inherited from the root host's
+        default at discovery time, or set here to override for this specific console. Fallback value only, same reasoning
+        as {$UNIFI.LOCAL.POLL.INTERVAL} above.
+    - macro: '{$UNIFI.SESSION.REFRESH.INTERVAL}'
+      value: 10m
+      description: Console session-token refresh interval ("Unifi API Raw", devices item) - normally inherited from the
+        root host's default at discovery time, or set here to override for this specific console. Fallback value only,
+        same reasoning as {$UNIFI.LOCAL.POLL.INTERVAL} above. See the root template's macro description for why 10m,
+        not something closer to the ~2 hour session token lifetime, is the right default.
     - macro: '{$UNIFI.API.AUTH.URI}'
       value: api/auth/login
       description: Local controller login endpoint
@@ -3998,7 +4166,7 @@ zabbix_export:
       Applied to SD-WAN config hosts discovered by Ubiquiti UniFi API. Monitors tunnel health, configuration
       status, and WAN internet issues for each SD-WAN config via /v1/sd-wan-configs/{id}/status.
 
-      Version: 1.1.0.1
+      Version: 1.2.0
     groups:
     - name: Templates
     items:
@@ -4007,7 +4175,7 @@ zabbix_export:
       type: HTTP_AGENT
       key: unifi.sdwan.status
       delay: 1m
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       url: https://api.ui.com/v1/sd-wan-configs/{$SDWANID}/status
@@ -4308,7 +4476,7 @@ zabbix_export:
       Monitors device status, firmware, version, uptime, and IP via cloud API.
       Macros {$HOSTID} and {$DEVICEID} are set automatically by the discovering gateway's host prototype.
 
-      Version: 1.1.0.1
+      Version: 1.2.0
 
       Template available at https://github.com/kairandles/zabbix-unifi
     groups:
@@ -4319,7 +4487,7 @@ zabbix_export:
       type: HTTP_AGENT
       key: unifi.api.device.raw
       delay: 1m
-      history: '0'
+      history: 1h
       value_type: TEXT
       trends: '0'
       url: https://api.ui.com/v1/devices?hostId={$HOSTID}
@@ -4617,7 +4785,7 @@ zabbix_export:
       Local controller polling for UniFi Access Points. Applied alongside Ubiquiti UniFi Device by host
       prototype discovery.
 
-      Version: 1.1.0.1
+      Version: 1.2.0
     groups:
     - name: Templates
     items:
@@ -4625,35 +4793,53 @@ zabbix_export:
       name: UAP Device Raw
       type: HTTP_AGENT
       key: unifi.uap.device
-      delay: 3m
-      history: '0'
+      delay: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      history: 1h
       value_type: TEXT
       trends: '0'
-      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}
-      post_type: JSON
-      posts: '{"username":"{$UNIFI.USERNAME}","password":"{$UNIFI.PASSWORD}"}'
-      request_method: POST
-      retrieve_mode: HEADERS
+      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device
       timeout: 10s
+      headers:
+      - name: Cookie
+        value: '{$UNIFI.API.AUTH.TOKEN}={$UNIFI.SESSION.TOKEN}'
       verify_peer: 'NO'
       verify_host: 'NO'
       preprocessing:
-      - type: REGEX
-        parameters:
-        - '{$UNIFI.API.AUTH.TOKEN}=([^;]+);'
-        - \1
       - type: JAVASCRIPT
         parameters:
         - |
           try {
               var mac = '{$DEVICEMAC}';
-              var url = 'https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device';
-              var req = new HttpRequest();
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + value);
-              var resp = req.get(url);
-              if (req.getStatus() !== 200) throw 'HTTP ' + req.getStatus();
-              var d = JSON.parse(resp);
-              var macNorm = mac.replace(/:/g,'').toLowerCase(); var dev = (d.data || []).filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
+              var macNorm = mac.replace(/:/g,'').toLowerCase();
+              var d;
+
+              try {
+                  d = JSON.parse(value);
+                  if (!d || !Array.isArray(d.data)) throw 'unexpected response shape';
+              } catch (e) {
+                  Zabbix.log(4, '[UniFi UAP] cached token rejected (' + e + '), requesting a fresh one');
+
+                  var loginReq = new HttpRequest();
+                  loginReq.addHeader('Content-Type: application/json');
+                  loginReq.post('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}',
+                      JSON.stringify({username: '{$UNIFI.USERNAME}', password: '{$UNIFI.PASSWORD}'}));
+                  if (loginReq.getStatus() !== 200) throw 'fresh login HTTP ' + loginReq.getStatus();
+
+                  var headers = loginReq.getHeaders();
+                  var setCookie = null;
+                  for (var h in headers) { if (h.toLowerCase() === 'set-cookie') { setCookie = headers[h]; break; } }
+                  var m = setCookie && setCookie.match(/{$UNIFI.API.AUTH.TOKEN}=([^;]+);/);
+                  if (!m) throw 'fresh login: no token in response headers';
+
+                  var dataReq = new HttpRequest();
+                  dataReq.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + m[1]);
+                  var dataResp = dataReq.get('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device');
+                  if (dataReq.getStatus() !== 200) throw 'fresh GET HTTP ' + dataReq.getStatus();
+                  d = JSON.parse(dataResp);
+                  if (!d || !Array.isArray(d.data)) throw 'fresh GET: unexpected response shape';
+              }
+
+              var dev = d.data.filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi UAP] ' + e);
@@ -5135,12 +5321,20 @@ zabbix_export:
     - macro: '{$UNIFI.PASSWORD}'
       type: SECRET_TEXT
       description: Local controller password
+    - macro: '{$UNIFI.SESSION.TOKEN}'
+      type: SECRET_TEXT
+      description: Cached local controller session token, propagated from the parent console - set by host prototype
     - macro: '{$UNIFI.API.AUTH.URI}'
       value: api/auth/login
     - macro: '{$UNIFI.API.AUTH.TOKEN}'
       value: TOKEN
     - macro: '{$UNIFI.API.URI}'
       value: proxy/network/api/s/default/stat
+    - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      value: 2m
+      description: How often this device polls the local controller directly - normally inherited from the console's
+        default unless overridden here. This value is only a fallback for before the first discovery cycle populates
+        the real one. No login is attached to this poll (see the parent console's session token caching).
     - macro: '{$UNIFI.CPU.USAGE.WARN}'
       value: '80'
       description: CPU usage warning threshold (%).
@@ -5169,7 +5363,7 @@ zabbix_export:
       Local controller polling for UniFi Switches. Applied alongside Ubiquiti UniFi Device by host prototype
       discovery.
 
-      Version: 1.1.0.1
+      Version: 1.2.0
     groups:
     - name: Templates
     items:
@@ -5177,35 +5371,53 @@ zabbix_export:
       name: USW Device Raw
       type: HTTP_AGENT
       key: unifi.usw.device
-      delay: 3m
-      history: '0'
+      delay: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      history: 1h
       value_type: TEXT
       trends: '0'
-      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}
-      post_type: JSON
-      posts: '{"username":"{$UNIFI.USERNAME}","password":"{$UNIFI.PASSWORD}"}'
-      request_method: POST
-      retrieve_mode: HEADERS
+      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device
       timeout: 10s
+      headers:
+      - name: Cookie
+        value: '{$UNIFI.API.AUTH.TOKEN}={$UNIFI.SESSION.TOKEN}'
       verify_peer: 'NO'
       verify_host: 'NO'
       preprocessing:
-      - type: REGEX
-        parameters:
-        - '{$UNIFI.API.AUTH.TOKEN}=([^;]+);'
-        - \1
       - type: JAVASCRIPT
         parameters:
         - |
           try {
               var mac = '{$DEVICEMAC}';
-              var url = 'https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device';
-              var req = new HttpRequest();
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + value);
-              var resp = req.get(url);
-              if (req.getStatus() !== 200) throw 'HTTP ' + req.getStatus();
-              var d = JSON.parse(resp);
-              var macNorm = mac.replace(/:/g,'').toLowerCase(); var dev = (d.data || []).filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
+              var macNorm = mac.replace(/:/g,'').toLowerCase();
+              var d;
+
+              try {
+                  d = JSON.parse(value);
+                  if (!d || !Array.isArray(d.data)) throw 'unexpected response shape';
+              } catch (e) {
+                  Zabbix.log(4, '[UniFi USW] cached token rejected (' + e + '), requesting a fresh one');
+
+                  var loginReq = new HttpRequest();
+                  loginReq.addHeader('Content-Type: application/json');
+                  loginReq.post('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}',
+                      JSON.stringify({username: '{$UNIFI.USERNAME}', password: '{$UNIFI.PASSWORD}'}));
+                  if (loginReq.getStatus() !== 200) throw 'fresh login HTTP ' + loginReq.getStatus();
+
+                  var headers = loginReq.getHeaders();
+                  var setCookie = null;
+                  for (var h in headers) { if (h.toLowerCase() === 'set-cookie') { setCookie = headers[h]; break; } }
+                  var m = setCookie && setCookie.match(/{$UNIFI.API.AUTH.TOKEN}=([^;]+);/);
+                  if (!m) throw 'fresh login: no token in response headers';
+
+                  var dataReq = new HttpRequest();
+                  dataReq.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + m[1]);
+                  var dataResp = dataReq.get('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device');
+                  if (dataReq.getStatus() !== 200) throw 'fresh GET HTTP ' + dataReq.getStatus();
+                  d = JSON.parse(dataResp);
+                  if (!d || !Array.isArray(d.data)) throw 'fresh GET: unexpected response shape';
+              }
+
+              var dev = d.data.filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi USW] ' + e);
@@ -6407,12 +6619,20 @@ zabbix_export:
     - macro: '{$UNIFI.PASSWORD}'
       type: SECRET_TEXT
       description: Local controller password
+    - macro: '{$UNIFI.SESSION.TOKEN}'
+      type: SECRET_TEXT
+      description: Cached local controller session token, propagated from the parent console - set by host prototype
     - macro: '{$UNIFI.API.AUTH.URI}'
       value: api/auth/login
     - macro: '{$UNIFI.API.AUTH.TOKEN}'
       value: TOKEN
     - macro: '{$UNIFI.API.URI}'
       value: proxy/network/api/s/default/stat
+    - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      value: 2m
+      description: How often this device polls the local controller directly - normally inherited from the console's
+        default unless overridden here. This value is only a fallback for before the first discovery cycle populates
+        the real one. No login is attached to this poll (see the parent console's session token caching).
     - macro: '{$UNIFI.CPU.USAGE.WARN}'
       value: '80'
       description: CPU usage warning threshold (%).
@@ -6459,7 +6679,7 @@ zabbix_export:
       Local controller polling for USW-Deployed-24 (USWDA) with battery backup. Applied alongside Ubiquiti
       UniFi Device by host prototype discovery.
 
-      Version: 1.1.0.1
+      Version: 1.2.0
     groups:
     - name: Templates
     items:
@@ -6467,35 +6687,53 @@ zabbix_export:
       name: UPS Device Raw
       type: HTTP_AGENT
       key: unifi.ups.device
-      delay: 3m
-      history: '0'
+      delay: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      history: 1h
       value_type: TEXT
       trends: '0'
-      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}
-      post_type: JSON
-      posts: '{"username":"{$UNIFI.USERNAME}","password":"{$UNIFI.PASSWORD}"}'
-      request_method: POST
-      retrieve_mode: HEADERS
+      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device
       timeout: 10s
+      headers:
+      - name: Cookie
+        value: '{$UNIFI.API.AUTH.TOKEN}={$UNIFI.SESSION.TOKEN}'
       verify_peer: 'NO'
       verify_host: 'NO'
       preprocessing:
-      - type: REGEX
-        parameters:
-        - '{$UNIFI.API.AUTH.TOKEN}=([^;]+);'
-        - \1
       - type: JAVASCRIPT
         parameters:
         - |
           try {
               var mac = '{$DEVICEMAC}';
-              var url = 'https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device';
-              var req = new HttpRequest();
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + value);
-              var resp = req.get(url);
-              if (req.getStatus() !== 200) throw 'HTTP ' + req.getStatus();
-              var d = JSON.parse(resp);
-              var macNorm = mac.replace(/:/g,'').toLowerCase(); var dev = (d.data || []).filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
+              var macNorm = mac.replace(/:/g,'').toLowerCase();
+              var d;
+
+              try {
+                  d = JSON.parse(value);
+                  if (!d || !Array.isArray(d.data)) throw 'unexpected response shape';
+              } catch (e) {
+                  Zabbix.log(4, '[UniFi UPS] cached token rejected (' + e + '), requesting a fresh one');
+
+                  var loginReq = new HttpRequest();
+                  loginReq.addHeader('Content-Type: application/json');
+                  loginReq.post('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}',
+                      JSON.stringify({username: '{$UNIFI.USERNAME}', password: '{$UNIFI.PASSWORD}'}));
+                  if (loginReq.getStatus() !== 200) throw 'fresh login HTTP ' + loginReq.getStatus();
+
+                  var headers = loginReq.getHeaders();
+                  var setCookie = null;
+                  for (var h in headers) { if (h.toLowerCase() === 'set-cookie') { setCookie = headers[h]; break; } }
+                  var m = setCookie && setCookie.match(/{$UNIFI.API.AUTH.TOKEN}=([^;]+);/);
+                  if (!m) throw 'fresh login: no token in response headers';
+
+                  var dataReq = new HttpRequest();
+                  dataReq.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + m[1]);
+                  var dataResp = dataReq.get('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device');
+                  if (dataReq.getStatus() !== 200) throw 'fresh GET HTTP ' + dataReq.getStatus();
+                  d = JSON.parse(dataResp);
+                  if (!d || !Array.isArray(d.data)) throw 'fresh GET: unexpected response shape';
+              }
+
+              var dev = d.data.filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi UPS] ' + e);
@@ -6788,12 +7026,20 @@ zabbix_export:
     - macro: '{$UNIFI.PASSWORD}'
       type: SECRET_TEXT
       description: Local controller password
+    - macro: '{$UNIFI.SESSION.TOKEN}'
+      type: SECRET_TEXT
+      description: Cached local controller session token, propagated from the parent console - set by host prototype
     - macro: '{$UNIFI.API.AUTH.URI}'
       value: api/auth/login
     - macro: '{$UNIFI.API.AUTH.TOKEN}'
       value: TOKEN
     - macro: '{$UNIFI.API.URI}'
       value: proxy/network/api/s/default/stat
+    - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      value: 2m
+      description: How often this device polls the local controller directly - normally inherited from the console's
+        default unless overridden here. This value is only a fallback for before the first discovery cycle populates
+        the real one. No login is attached to this poll (see the parent console's session token caching).
     - macro: '{$UNIFI.CPU.USAGE.WARN}'
       value: '80'
       description: CPU usage warning threshold (%).
@@ -6831,7 +7077,7 @@ zabbix_export:
       Local controller polling for USP-RPS (Redundant Power Supply). Monitors PSU failover state - DISASTER
       fires when a connected device loses its primary PSU and the RPS takes over.
 
-      Version: 1.1.0.1
+      Version: 1.2.0
     groups:
     - name: Templates
     items:
@@ -6839,35 +7085,53 @@ zabbix_export:
       name: RPS Device Raw
       type: HTTP_AGENT
       key: unifi.rps.device
-      delay: 3m
-      history: '0'
+      delay: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      history: 1h
       value_type: TEXT
       trends: '0'
-      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}
-      post_type: JSON
-      posts: '{"username":"{$UNIFI.USERNAME}","password":"{$UNIFI.PASSWORD}"}'
-      request_method: POST
-      retrieve_mode: HEADERS
+      url: https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device
       timeout: 10s
+      headers:
+      - name: Cookie
+        value: '{$UNIFI.API.AUTH.TOKEN}={$UNIFI.SESSION.TOKEN}'
       verify_peer: 'NO'
       verify_host: 'NO'
       preprocessing:
-      - type: REGEX
-        parameters:
-        - '{$UNIFI.API.AUTH.TOKEN}=([^;]+);'
-        - \1
       - type: JAVASCRIPT
         parameters:
         - |
           try {
               var mac = '{$DEVICEMAC}';
-              var url = 'https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device';
-              var req = new HttpRequest();
-              req.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + value);
-              var resp = req.get(url);
-              if (req.getStatus() !== 200) throw 'HTTP ' + req.getStatus();
-              var d = JSON.parse(resp);
-              var macNorm = mac.replace(/:/g,'').toLowerCase(); var dev = (d.data || []).filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
+              var macNorm = mac.replace(/:/g,'').toLowerCase();
+              var d;
+
+              try {
+                  d = JSON.parse(value);
+                  if (!d || !Array.isArray(d.data)) throw 'unexpected response shape';
+              } catch (e) {
+                  Zabbix.log(4, '[UniFi RPS] cached token rejected (' + e + '), requesting a fresh one');
+
+                  var loginReq = new HttpRequest();
+                  loginReq.addHeader('Content-Type: application/json');
+                  loginReq.post('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.AUTH.URI}',
+                      JSON.stringify({username: '{$UNIFI.USERNAME}', password: '{$UNIFI.PASSWORD}'}));
+                  if (loginReq.getStatus() !== 200) throw 'fresh login HTTP ' + loginReq.getStatus();
+
+                  var headers = loginReq.getHeaders();
+                  var setCookie = null;
+                  for (var h in headers) { if (h.toLowerCase() === 'set-cookie') { setCookie = headers[h]; break; } }
+                  var m = setCookie && setCookie.match(/{$UNIFI.API.AUTH.TOKEN}=([^;]+);/);
+                  if (!m) throw 'fresh login: no token in response headers';
+
+                  var dataReq = new HttpRequest();
+                  dataReq.addHeader('Cookie: {$UNIFI.API.AUTH.TOKEN}=' + m[1]);
+                  var dataResp = dataReq.get('https://{$UNIFI.LOCAL.IP}/{$UNIFI.API.URI}/device');
+                  if (dataReq.getStatus() !== 200) throw 'fresh GET HTTP ' + dataReq.getStatus();
+                  d = JSON.parse(dataResp);
+                  if (!d || !Array.isArray(d.data)) throw 'fresh GET: unexpected response shape';
+              }
+
+              var dev = d.data.filter(function(x) { return x.mac && x.mac.replace(/:/g,'').toLowerCase() === macNorm; });
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi RPS] ' + e);
@@ -7316,12 +7580,20 @@ zabbix_export:
     - macro: '{$UNIFI.PASSWORD}'
       type: SECRET_TEXT
       description: Local controller password
+    - macro: '{$UNIFI.SESSION.TOKEN}'
+      type: SECRET_TEXT
+      description: Cached local controller session token, propagated from the parent console - set by host prototype
     - macro: '{$UNIFI.API.AUTH.URI}'
       value: api/auth/login
     - macro: '{$UNIFI.API.AUTH.TOKEN}'
       value: TOKEN
     - macro: '{$UNIFI.API.URI}'
       value: proxy/network/api/s/default/stat
+    - macro: '{$UNIFI.LOCAL.POLL.INTERVAL}'
+      value: 2m
+      description: How often this device polls the local controller directly - normally inherited from the console's
+        default unless overridden here. This value is only a fallback for before the first discovery cycle populates
+        the real one. No login is attached to this poll (see the parent console's session token caching).
     - macro: '{$UNIFI.CPU.USAGE.WARN}'
       value: '80'
       description: CPU usage warning threshold (%).
