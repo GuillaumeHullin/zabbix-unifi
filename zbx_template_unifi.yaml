@@ -25,7 +25,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.1.0
+      Version: 1.1.0.1
     groups:
     - name: Templates
     items:
@@ -244,7 +244,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.1.0
+      Version: 1.1.0.1
     groups:
     - name: Templates
     items:
@@ -330,6 +330,9 @@ zabbix_export:
       - type: JSONPATH
         parameters:
         - $..reportedState.hardware.name.first()
+      - type: DISCARD_UNCHANGED_HEARTBEAT
+        parameters:
+        - 1h
       master_item:
         key: unifi.api.hosts
       tags:
@@ -404,6 +407,9 @@ zabbix_export:
       - type: JSONPATH
         parameters:
         - $.data.ipAddress
+      - type: DISCARD_UNCHANGED_HEARTBEAT
+        parameters:
+        - 1h
       master_item:
         key: unifi.api.hosts
       tags:
@@ -422,6 +428,9 @@ zabbix_export:
       - type: JSONPATH
         parameters:
         - $..reportedState.hardware.serialno.first()
+      - type: DISCARD_UNCHANGED_HEARTBEAT
+        parameters:
+        - 1h
       master_item:
         key: unifi.api.hosts
       tags:
@@ -439,6 +448,9 @@ zabbix_export:
       - type: JSONPATH
         parameters:
         - $..reportedState.isStacked.first()
+      - type: DISCARD_UNCHANGED_HEARTBEAT
+        parameters:
+        - 1h
       master_item:
         key: unifi.api.hosts
       tags:
@@ -488,6 +500,9 @@ zabbix_export:
       - type: JSONPATH
         parameters:
         - $..reportedState.version.first()
+      - type: DISCARD_UNCHANGED_HEARTBEAT
+        parameters:
+        - 1h
       master_item:
         key: unifi.api.hosts
       tags:
@@ -1506,6 +1521,9 @@ zabbix_export:
           - \d+\.\d+\.\d+\.\d+
           - \0
           error_handler: DISCARD_VALUE
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
         master_item:
           key: unifi.api.hosts
         tags:
@@ -1535,6 +1553,9 @@ zabbix_export:
           - $..reportedState.wans[?(@.type=="{#WANTYPE}")].speedType.first()
           error_handler: CUSTOM_VALUE
           error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
         master_item:
           key: unifi.api.hosts
         tags:
@@ -1599,6 +1620,292 @@ zabbix_export:
           description: Gateway switch port {#PORTID} ({#PORTNAME}) has gone down after previously being
             up. Check the cable and connected device. Resolves if the port comes back up, or automatically
             after 24 hours. Can be manually closed for intentionally unused ports.
+      - uuid: f1f781fc40cf450d82be3efdc59e16c2
+        name: GW Port {#PORTID} ({#PORTNAME}) Name
+        type: DEPENDENT
+        key: unifi.gw.port.name[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].name.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 8359ad5b1fa04415a288f3356936fe62
+          expression: change(/Ubiquiti UniFi API Host/unifi.gw.port.name[{#PORTID}])=1 and
+            last(/Ubiquiti UniFi API Host/unifi.gw.port.name[{#PORTID}])<>"unknown" and
+            last(/Ubiquiti UniFi API Host/unifi.gw.port.name[{#PORTID}],#2)<>"unknown"
+          name: '{HOST.NAME} gateway port {#PORTID} renamed to {ITEM.LASTVALUE}'
+          priority: INFO
+          manual_close: 'YES'
+          description: This port's name was changed in UniFi (e.g. after connecting a new device, which auto-names
+            the port after its hostname). Confirm this matches an expected patching change.
+      - uuid: 348cebe766c140b4b89861de17aad1e9
+        name: GW Port {#PORTID} ({#PORTNAME}) Full Duplex
+        type: DEPENDENT
+        key: unifi.gw.port.full_duplex[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].full_duplex.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 42222de67d46466fa9b65f9a4f26e564
+        name: GW Port {#PORTID} ({#PORTNAME}) Autoneg
+        type: DEPENDENT
+        key: unifi.gw.port.autoneg[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].autoneg.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 086272c50b924d6ba9b34eacaab1cd2c
+        name: GW Port {#PORTID} ({#PORTNAME}) Is Uplink
+        type: DEPENDENT
+        key: unifi.gw.port.is_uplink[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].is_uplink.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 1d2c5375574141dab1b1840fab9c222a
+        name: GW Port {#PORTID} ({#PORTNAME}) Link Down Count
+        type: DEPENDENT
+        key: unifi.gw.port.link_down_count[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].link_down_count.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: e46ea0fd6b244e91a0a9ac341eeb5faf
+        name: GW Port {#PORTID} ({#PORTNAME}) MAC Table Count
+        type: DEPENDENT
+        key: unifi.gw.port.mac_table_count[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].mac_table_count.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: c78aa2b4ea514e04a9b9d12bbe5ebf6a
+        name: GW Port {#PORTID} ({#PORTNAME}) RX Dropped
+        type: DEPENDENT
+        key: unifi.gw.port.rx_dropped[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].rx_dropped.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 200755038a5a41ffb011009283f1c26c
+          expression: change(/Ubiquiti UniFi API Host/unifi.gw.port.rx_dropped[{#PORTID}])>0 and
+            last(/Ubiquiti UniFi API Host/unifi.gw.port.rx_dropped[{#PORTID}])>0
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) RX dropped packets: {ITEM.LASTVALUE}'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: Received packets are being dropped on gateway port {#PORTID} ({#PORTNAME}). Usually indicates
+            congestion or a buffer limit being hit rather than a physical-layer fault.
+      - uuid: 9e134b8d6deb4555a98861400656a57c
+        name: GW Port {#PORTID} ({#PORTNAME}) TX Dropped
+        type: DEPENDENT
+        key: unifi.gw.port.tx_dropped[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].tx_dropped.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: c841c154db68450bb2df2b6855e8e79d
+          expression: change(/Ubiquiti UniFi API Host/unifi.gw.port.tx_dropped[{#PORTID}])>0 and
+            last(/Ubiquiti UniFi API Host/unifi.gw.port.tx_dropped[{#PORTID}])>0
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) TX dropped packets: {ITEM.LASTVALUE}'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: Transmit packets are being dropped on gateway port {#PORTID} ({#PORTNAME}). Usually indicates
+            congestion or a buffer limit being hit rather than a physical-layer fault.
+      - uuid: 4b39bef9ab1146de98f01c0cc28b5942
+        name: GW Port {#PORTID} ({#PORTNAME}) STP State
+        type: DEPENDENT
+        key: unifi.gw.port.stp_state[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].stp_state.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 62d0130f748b4e49939b3406a6f9b5b9
+          expression: find(/Ubiquiti UniFi API Host/unifi.gw.port.stp_state[{#PORTID}],#1,"regexp","blocking")=1
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) STP blocking'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: Spanning Tree is actively blocking this port to prevent a network loop. If unexpected, check
+            for an accidental cable loop or a misconfigured redundant link near this port.
+      - uuid: 2f4688620bdc4c97a69e8709f4f95abe
+        name: GW Port {#PORTID} ({#PORTNAME}) STP Edge Port
+        type: DEPENDENT
+        key: unifi.gw.port.stp_edge_port[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].stp_edge_port.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 64618e430d204a199befee17ae3804f2
+        name: GW Port {#PORTID} ({#PORTNAME}) QoS Mode
+        type: DEPENDENT
+        key: unifi.gw.port.qos[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].qos_profile.qos_profile_mode.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: none
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
       - uuid: d2a4ec5ec79c41ac9fc5bab7c414a791
         name: GW Port {#PORTID} ({#PORTNAME}) Speed
         type: DEPENDENT
@@ -1773,6 +2080,413 @@ zabbix_export:
         path: $.port_idx
       - lld_macro: '{#PORTNAME}'
         path: $.name
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.data[0].port_table
+        error_handler: CUSTOM_VALUE
+        error_handler_params: '[]'
+    - uuid: 87cee6738b0c4d259c7a278768a999fa
+      name: Discover Gateway SFP Ports
+      type: DEPENDENT
+      key: unifi.gw.sfp.discovery
+      delay: '0'
+      filter:
+        conditions:
+        - macro: '{#SFPFOUND}'
+          value: ^true$
+          operator: MATCHES_REGEX
+          formulaid: A
+      item_prototypes:
+      - uuid: de2b7eae0417447ea02eb284b5a0e712
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP TX Fault
+        type: DEPENDENT
+        key: unifi.gw.sfp.txfault[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_tx_fault.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: 'false'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 85a76d4fb8e94f6fb23896090aa1f9bf
+          expression: find(/Ubiquiti UniFi API Host/unifi.gw.sfp.txfault[{#PORTID}],#1,"regexp","true")=1
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP TX fault active'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: The SFP module on gateway port {#PORTID} ({#PORTNAME}) is reporting a transmit fault. This
+            typically indicates a failed or failing laser, a faulty module, or a broken fibre on the TX strand. The
+            link will likely be down. Replace the module and check the fibre patch lead.
+      - uuid: e8b7b00be8424fc28363649d47cec801
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP RX Loss of Signal
+        type: DEPENDENT
+        key: unifi.gw.sfp.rxlos[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_rx_los.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: 'false'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 153196ceb9334cf3af2586a2a45625fa
+          expression: find(/Ubiquiti UniFi API Host/unifi.gw.sfp.rxlos[{#PORTID}],#1,"regexp","true")=1
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP RX loss of signal'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: The SFP module on gateway port {#PORTID} ({#PORTNAME}) is not detecting a receive signal.
+            Check the fibre patch lead, connector cleanliness, and the remote transmitter.
+      - uuid: 9e7fb636aa9b40dc83c88a5242cbbd65
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP Part Number
+        type: DEPENDENT
+        key: unifi.gw.sfp.part[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_part.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 197c90066e8b4d7b8cc992601279595b
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP Serial Number
+        type: DEPENDENT
+        key: unifi.gw.sfp.serial[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_serial.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 640d5c92be4f484398828dc5f6b67ae2
+          expression: change(/Ubiquiti UniFi API Host/unifi.gw.sfp.serial[{#PORTID}])=1 and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.serial[{#PORTID}])<>"unknown" and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.serial[{#PORTID}],#2)<>"unknown"
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP module changed: {ITEM.LASTVALUE}'
+          priority: INFO
+          manual_close: 'YES'
+          description: The SFP module's serial number changed, indicating the physical module was swapped (not
+            just reseated). Confirm this was expected maintenance.
+      - uuid: 618dd87560e24d6cac8c56bc652775af
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP Vendor
+        type: DEPENDENT
+        key: unifi.gw.sfp.vendor[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_vendor.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: a3617d714b0b43b78ecbef5e99db8a31
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP EEPROM Readable
+        type: DEPENDENT
+        key: unifi.gw.sfp.eeprom[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_eeprom.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: 'false'
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      master_item:
+        key: unifi.local.gw.device
+      lld_macro_paths:
+      - lld_macro: '{#PORTID}'
+        path: $.port_idx
+      - lld_macro: '{#PORTNAME}'
+        path: $.name
+      - lld_macro: '{#SFPFOUND}'
+        path: $.sfp_found
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.data[0].port_table
+        error_handler: CUSTOM_VALUE
+        error_handler_params: '[]'
+    - uuid: c12b6d333910407e9bc782c72aa863de
+      name: Discover Gateway SFP Optical Ports
+      type: DEPENDENT
+      key: unifi.gw.sfp.optical.discovery
+      delay: '0'
+      filter:
+        conditions:
+        - macro: '{#SFPFOUND}'
+          value: ^true$
+          operator: MATCHES_REGEX
+          formulaid: A
+        - macro: '{#SFPPART}'
+          value: ^DAC-
+          operator: NOT_MATCHES_REGEX
+          formulaid: B
+        evaltype: AND
+      item_prototypes:
+      - uuid: 1a745340b73a4c4d807b001ecdb5793e
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP Temperature
+        type: DEPENDENT
+        key: unifi.gw.sfp.temperature[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: °C
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_temperature.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 95e1d3a318214ec19afd47e364ad7c44
+          expression: last(/Ubiquiti UniFi API Host/unifi.gw.sfp.temperature[{#PORTID}])>{$UNIFI.SFP.TEMP.HIGH} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.temperature[{#PORTID}])>0
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP temperature critical: {ITEM.LASTVALUE} (>{$UNIFI.SFP.TEMP.HIGH}°C)'
+          priority: HIGH
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: The SFP module on gateway port {#PORTID} ({#PORTNAME}) has exceeded the critical temperature
+            threshold ({$UNIFI.SFP.TEMP.HIGH}°C).
+        - uuid: 7c294b789b9140f88fd3af46d46089f7
+          expression: last(/Ubiquiti UniFi API Host/unifi.gw.sfp.temperature[{#PORTID}])>{$UNIFI.SFP.TEMP.WARN} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.temperature[{#PORTID}])<={$UNIFI.SFP.TEMP.HIGH} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.temperature[{#PORTID}])>0
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP temperature high: {ITEM.LASTVALUE} (>{$UNIFI.SFP.TEMP.WARN}°C)'
+          priority: WARNING
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: The SFP module on gateway port {#PORTID} ({#PORTNAME}) is above the warning temperature
+            threshold ({$UNIFI.SFP.TEMP.WARN}°C).
+      - uuid: 861acca3aa504068b95a7ee102ca303e
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP RX Power
+        type: DEPENDENT
+        key: unifi.gw.sfp.rxpower[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: dBm
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_rxpower.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '-40'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: fc225234feec4fd48253d98bdd19eec1
+          expression: last(/Ubiquiti UniFi API Host/unifi.gw.sfp.rxpower[{#PORTID}])<{$UNIFI.SFP.RXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.rxpower[{#PORTID}])>-39
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP RX power critical low: {ITEM.LASTVALUE} dBm'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: Received optical power on gateway port {#PORTID} ({#PORTNAME}) is critically low
+            ({$UNIFI.SFP.RXPOWER.LOW.HIGH} dBm threshold).
+        - uuid: a6d44cc315294afbac1bcc902db28185
+          expression: last(/Ubiquiti UniFi API Host/unifi.gw.sfp.rxpower[{#PORTID}])<{$UNIFI.SFP.RXPOWER.LOW.WARN} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.rxpower[{#PORTID}])>={$UNIFI.SFP.RXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.rxpower[{#PORTID}])>-39
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP RX power low: {ITEM.LASTVALUE} dBm'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: Received optical power on gateway port {#PORTID} ({#PORTNAME}) is below the warning threshold
+            ({$UNIFI.SFP.RXPOWER.LOW.WARN} dBm).
+      - uuid: 37acf6115b4142fcad2a1626ffda0f2c
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP TX Power
+        type: DEPENDENT
+        key: unifi.gw.sfp.txpower[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: dBm
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_txpower.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '-40'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: d7e624bdf1d9434bb02830f50809aea4
+          expression: last(/Ubiquiti UniFi API Host/unifi.gw.sfp.txpower[{#PORTID}])<{$UNIFI.SFP.TXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.txpower[{#PORTID}])>-39
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP TX power critical low: {ITEM.LASTVALUE} dBm'
+          priority: HIGH
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: Transmit laser power on gateway port {#PORTID} ({#PORTNAME}) is critically low
+            ({$UNIFI.SFP.TXPOWER.LOW.HIGH} dBm threshold).
+        - uuid: ee7ea0fd02eb427896fefd6af7157d8b
+          expression: last(/Ubiquiti UniFi API Host/unifi.gw.sfp.txpower[{#PORTID}])<{$UNIFI.SFP.TXPOWER.LOW.WARN} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.txpower[{#PORTID}])>={$UNIFI.SFP.TXPOWER.LOW.HIGH} and
+            last(/Ubiquiti UniFi API Host/unifi.gw.sfp.txpower[{#PORTID}])>-39
+          name: '{HOST.NAME} gateway port {#PORTID} ({#PORTNAME}) SFP TX power low: {ITEM.LASTVALUE} dBm'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: 'Console lost cloud connectivity - state: {ITEM.LASTVALUE}'
+            expression: find(/Ubiquiti UniFi API Host/unifi.api.host.state,#1,"regexp","connected")<>1
+          description: Transmit laser output on gateway port {#PORTID} ({#PORTNAME}) is below the warning threshold
+            ({$UNIFI.SFP.TXPOWER.LOW.WARN} dBm).
+      - uuid: 2df75f3ac526421793dfeb180873c4af
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP Voltage
+        type: DEPENDENT
+        key: unifi.gw.sfp.voltage[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: V
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_voltage.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 5528aa7da57f4713bc720620043aafed
+        name: GW Port {#PORTID} ({#PORTNAME}) SFP Current
+        type: DEPENDENT
+        key: unifi.gw.sfp.current[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: mA
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_current.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      master_item:
+        key: unifi.local.gw.device
+      lld_macro_paths:
+      - lld_macro: '{#PORTID}'
+        path: $.port_idx
+      - lld_macro: '{#PORTNAME}'
+        path: $.name
+      - lld_macro: '{#SFPFOUND}'
+        path: $.sfp_found
+      - lld_macro: '{#SFPPART}'
+        path: $.sfp_part
       preprocessing:
       - type: JSONPATH
         parameters:
@@ -3143,6 +3857,9 @@ zabbix_export:
         - type: JSONPATH
           parameters:
           - $..reportedState.controllers[?(@.name=="{#CONTROLLERNAME}")].version.first()
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
         master_item:
           key: unifi.api.hosts
         tags:
@@ -3242,6 +3959,24 @@ zabbix_export:
     - macro: '{$UNIFI.TEMP.HIGH}'
       value: '80'
       description: Temperature °C HIGH threshold
+    - macro: '{$UNIFI.SFP.TEMP.WARN}'
+      value: '70'
+      description: SFP module temperature warning threshold (°C). Active 10G SFP+ modules routinely run 60-65°C; 70°C indicates a genuinely elevated condition.
+    - macro: '{$UNIFI.SFP.TEMP.HIGH}'
+      value: '75'
+      description: SFP module temperature critical threshold (°C). Commercial SFP+ modules are typically rated to 70°C; above this degradation and failure risk is high.
+    - macro: '{$UNIFI.SFP.RXPOWER.LOW.WARN}'
+      value: '-12'
+      description: SFP RX power warning threshold (dBm). Below this level signal quality is degrading.
+    - macro: '{$UNIFI.SFP.RXPOWER.LOW.HIGH}'
+      value: '-16'
+      description: SFP RX power critical threshold (dBm). Near receiver sensitivity limit for 10GBase-LR.
+    - macro: '{$UNIFI.SFP.TXPOWER.LOW.WARN}'
+      value: '-6'
+      description: SFP TX power warning threshold (dBm). Below normal output for 10GBase-LR.
+    - macro: '{$UNIFI.SFP.TXPOWER.LOW.HIGH}'
+      value: '-9'
+      description: SFP TX power critical threshold (dBm). Near minimum transmit spec for 10GBase-LR.
     - macro: '{$UNIFI.WAN.ENABLED}'
       value: '1'
       description: 'Controls both the unplugged and 0% uptime alarms for all WANs. Set context form {$UNIFI.WAN.ENABLED:WAN2}=0 on a host to suppress all alarms for that WAN (e.g. WAN2 not configured).'
@@ -3263,7 +3998,7 @@ zabbix_export:
       Applied to SD-WAN config hosts discovered by Ubiquiti UniFi API. Monitors tunnel health, configuration
       status, and WAN internet issues for each SD-WAN config via /v1/sd-wan-configs/{id}/status.
 
-      Version: 1.1.0
+      Version: 1.1.0.1
     groups:
     - name: Templates
     items:
@@ -3573,7 +4308,7 @@ zabbix_export:
       Monitors device status, firmware, version, uptime, and IP via cloud API.
       Macros {$HOSTID} and {$DEVICEID} are set automatically by the discovering gateway's host prototype.
 
-      Version: 1.1.0
+      Version: 1.1.0.1
 
       Template available at https://github.com/kairandles/zabbix-unifi
     groups:
@@ -3882,7 +4617,7 @@ zabbix_export:
       Local controller polling for UniFi Access Points. Applied alongside Ubiquiti UniFi Device by host
       prototype discovery.
 
-      Version: 1.1.0
+      Version: 1.1.0.1
     groups:
     - name: Templates
     items:
@@ -4233,6 +4968,9 @@ zabbix_export:
           - $.data[0].radio_table_stats[?(@.name=="{#RADIONAME}")].radio.first()
           error_handler: CUSTOM_VALUE
           error_handler_params: ''
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
         master_item:
           key: unifi.uap.device
         tags:
@@ -4431,7 +5169,7 @@ zabbix_export:
       Local controller polling for UniFi Switches. Applied alongside Ubiquiti UniFi Device by host prototype
       discovery.
 
-      Version: 1.1.0
+      Version: 1.1.0.1
     groups:
     - name: Templates
     items:
@@ -4717,6 +5455,297 @@ zabbix_export:
             if this is a powered port. Resolves immediately if the port comes back up, or automatically after 24
             hours if it remains down. Can also be closed manually for ports that are intentionally unused.
             Suppressed if the switch is offline.
+      - uuid: 83720187d7a3432e8549c39093b15288
+        name: Port {#PORTID} ({#PORTNAME}) Name
+        type: DEPENDENT
+        key: unifi.usw.port.name[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].name.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 11e1506e9de4441b8c06bffb932c004d
+          expression: change(/Ubiquiti UniFi USW/unifi.usw.port.name[{#PORTID}])=1 and
+            last(/Ubiquiti UniFi USW/unifi.usw.port.name[{#PORTID}])<>"unknown" and
+            last(/Ubiquiti UniFi USW/unifi.usw.port.name[{#PORTID}],#2)<>"unknown"
+          name: '{HOST.NAME} port {#PORTID} renamed to {ITEM.LASTVALUE}'
+          priority: INFO
+          manual_close: 'YES'
+          description: This port's name was changed in UniFi (e.g. after connecting a new device, which auto-names
+            the port after its hostname). Confirm this matches an expected patching change.
+      - uuid: 5b1947f8a4cf422796018b720b678406
+        name: Port {#PORTID} ({#PORTNAME}) Full Duplex
+        type: DEPENDENT
+        key: unifi.usw.port.full_duplex[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].full_duplex.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 962397af08c44a278ccda01d2157c6cd
+        name: Port {#PORTID} ({#PORTNAME}) Autoneg
+        type: DEPENDENT
+        key: unifi.usw.port.autoneg[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].autoneg.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 8594d41979ff4d7d902ba7b7cdc75065
+        name: Port {#PORTID} ({#PORTNAME}) Is Uplink
+        type: DEPENDENT
+        key: unifi.usw.port.is_uplink[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].is_uplink.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 1bac4b852b1e4416991c17ff2ca4104c
+        name: Port {#PORTID} ({#PORTNAME}) Link Down Count
+        type: DEPENDENT
+        key: unifi.usw.port.link_down_count[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].link_down_count.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 97836c10a8f6473c8a8b46cc9648ebe3
+        name: Port {#PORTID} ({#PORTNAME}) MAC Table Count
+        type: DEPENDENT
+        key: unifi.usw.port.mac_table_count[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].mac_table_count.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 83e99a5048294fe38b3ede053e990d41
+        name: Port {#PORTID} ({#PORTNAME}) RX Dropped
+        type: DEPENDENT
+        key: unifi.usw.port.rx_dropped[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].rx_dropped.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 3e64403bcc7549e58adb5d7ab5c5e601
+          expression: change(/Ubiquiti UniFi USW/unifi.usw.port.rx_dropped[{#PORTID}])>0 and last(/Ubiquiti UniFi
+            USW/unifi.usw.port.rx_dropped[{#PORTID}])>0
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) RX dropped packets: {ITEM.LASTVALUE}'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
+          description: Received packets are being dropped on switch port {#PORTID} ({#PORTNAME}). Usually indicates
+            congestion or a buffer limit being hit rather than a physical-layer fault. Check for oversubscription
+            on this port or downstream.
+      - uuid: c80c1e807f374f77b7f25f9d7acf92f1
+        name: Port {#PORTID} ({#PORTNAME}) TX Dropped
+        type: DEPENDENT
+        key: unifi.usw.port.tx_dropped[{#PORTID}]
+        delay: '0'
+        history: 90d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].tx_dropped.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 7f50747f5b8b49068c7d4e1626a82592
+          expression: change(/Ubiquiti UniFi USW/unifi.usw.port.tx_dropped[{#PORTID}])>0 and last(/Ubiquiti UniFi
+            USW/unifi.usw.port.tx_dropped[{#PORTID}])>0
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) TX dropped packets: {ITEM.LASTVALUE}'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
+          description: Transmit packets are being dropped on switch port {#PORTID} ({#PORTNAME}). Usually indicates
+            congestion or a buffer limit being hit rather than a physical-layer fault. Check for oversubscription
+            on this port or downstream.
+      - uuid: c489770371ea4cafa7c20c317a661c85
+        name: Port {#PORTID} ({#PORTNAME}) STP State
+        type: DEPENDENT
+        key: unifi.usw.port.stp_state[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].stp_state.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: c7a2546e01eb49cfb07b8aff9ac55bab
+          expression: find(/Ubiquiti UniFi USW/unifi.usw.port.stp_state[{#PORTID}],#1,"regexp","blocking")=1
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) STP blocking'
+          priority: WARNING
+          manual_close: 'YES'
+          dependencies:
+          - name: '{HOST.NAME} offline - not seen by local controller'
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
+          description: Spanning Tree is actively blocking this port to prevent a network loop. If unexpected, check
+            for an accidental cable loop or a misconfigured redundant link near this port.
+      - uuid: a91b87d7510d4d2fb3f43e611ea186e6
+        name: Port {#PORTID} ({#PORTNAME}) STP Edge Port
+        type: DEPENDENT
+        key: unifi.usw.port.stp_edge_port[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].stp_edge_port.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: f833cbc9574d481ba2bdba951af7a8f8
+        name: Port {#PORTID} ({#PORTNAME}) QoS Mode
+        type: DEPENDENT
+        key: unifi.usw.port.qos[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].qos_profile.qos_profile_mode.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: none
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
       - uuid: b096887a518743a19e1dad570cfa01b2
         name: Port {#PORTID} ({#PORTNAME}) Speed
         type: DEPENDENT
@@ -5000,6 +6029,168 @@ zabbix_export:
           description: The SFP module on port {#PORTID} ({#PORTNAME}) is reporting a receive fault. This typically
             indicates the RX fibre strand is disconnected, dirty, or broken, or the remote TX laser has failed.
             Check the fibre patch lead and clean both connectors.
+      - uuid: b8d468030bc8489eb3e61b53bba9335c
+        name: Port {#PORTID} ({#PORTNAME}) SFP Compliance
+        type: DEPENDENT
+        key: unifi.usw.sfp.compliance[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_compliance.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 7e6a91d7535c4ff28d24e7f0a99c2f9c
+        name: Port {#PORTID} ({#PORTNAME}) SFP Part Number
+        type: DEPENDENT
+        key: unifi.usw.sfp.part[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_part.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 79f7bc4490ad4131bdbb469820248abc
+        name: Port {#PORTID} ({#PORTNAME}) SFP Serial Number
+        type: DEPENDENT
+        key: unifi.usw.sfp.serial[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_serial.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+        trigger_prototypes:
+        - uuid: 130875a1ef6a446c884aefd1c7c55e7d
+          expression: change(/Ubiquiti UniFi USW/unifi.usw.sfp.serial[{#PORTID}])=1 and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.serial[{#PORTID}])<>"unknown" and
+            last(/Ubiquiti UniFi USW/unifi.usw.sfp.serial[{#PORTID}],#2)<>"unknown"
+          name: '{HOST.NAME} port {#PORTID} ({#PORTNAME}) SFP module changed: {ITEM.LASTVALUE}'
+          priority: INFO
+          manual_close: 'YES'
+          description: The SFP module's serial number changed, indicating the physical module was swapped (not
+            just reseated). Confirm this was expected maintenance.
+      - uuid: f577a6c2da8e481aa1266a00c2d6159f
+        name: Port {#PORTID} ({#PORTNAME}) SFP Vendor
+        type: DEPENDENT
+        key: unifi.usw.sfp.vendor[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_vendor.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 96ce560074f442558486701e5e85314a
+        name: Port {#PORTID} ({#PORTNAME}) SFP Revision
+        type: DEPENDENT
+        key: unifi.usw.sfp.rev[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: TEXT
+        trends: '0'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].sfp_rev.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: unknown
+        - type: DISCARD_UNCHANGED_HEARTBEAT
+          parameters:
+          - 1h
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: sfp
+        - tag: port
+          value: '{#PORTID}'
+      master_item:
+        key: unifi.usw.device
+      lld_macro_paths:
+      - lld_macro: '{#PORTID}'
+        path: $.port_idx
+      - lld_macro: '{#PORTNAME}'
+        path: $.name
+      - lld_macro: '{#SFPFOUND}'
+        path: $.sfp_found
+      preprocessing:
+      - type: JSONPATH
+        parameters:
+        - $.data[0].port_table
+        error_handler: CUSTOM_VALUE
+        error_handler_params: '[]'
+    - uuid: 079416a1443f45c7842d2a890ed51403
+      name: Discover SFP Optical Ports
+      type: DEPENDENT
+      key: unifi.usw.sfp.optical.discovery
+      delay: '0'
+      filter:
+        conditions:
+        - macro: '{#SFPFOUND}'
+          value: ^true$
+          operator: MATCHES_REGEX
+          formulaid: A
+        - macro: '{#SFPCOMPLIANCE}'
+          value: ^DAC$
+          operator: NOT_MATCHES_REGEX
+          formulaid: B
+        evaltype: AND
+      item_prototypes:
       - uuid: 334a82dcf87b4ef0aa854948d7637982
         name: Port {#PORTID} ({#PORTNAME}) SFP Temperature
         type: DEPENDENT
@@ -5131,7 +6322,7 @@ zabbix_export:
             recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Transmit laser power on port {#PORTID} ({#PORTNAME}) is critically low
             ({$UNIFI.SFP.TXPOWER.LOW.HIGH} dBm threshold). The module laser is likely failing. Plan a
-            replacement — a module at this level may be causing signal loss at the far end even if no RX
+            replacement - a module at this level may be causing signal loss at the far end even if no RX
             fault is yet reported locally.
         - uuid: 77cc2394ec624f14963baa0779617e9d
           expression: last(/Ubiquiti UniFi USW/unifi.usw.sfp.txpower[{#PORTID}])<{$UNIFI.SFP.TXPOWER.LOW.WARN} and
@@ -5198,6 +6389,8 @@ zabbix_export:
         path: $.name
       - lld_macro: '{#SFPFOUND}'
         path: $.sfp_found
+      - lld_macro: '{#SFPCOMPLIANCE}'
+        path: $.sfp_compliance
       preprocessing:
       - type: JSONPATH
         parameters:
@@ -5266,7 +6459,7 @@ zabbix_export:
       Local controller polling for USW-Deployed-24 (USWDA) with battery backup. Applied alongside Ubiquiti
       UniFi Device by host prototype discovery.
 
-      Version: 1.1.0
+      Version: 1.1.0.1
     groups:
     - name: Templates
     items:
@@ -5638,7 +6831,7 @@ zabbix_export:
       Local controller polling for USP-RPS (Redundant Power Supply). Monitors PSU failover state - DISASTER
       fires when a connected device loses its primary PSU and the RPS takes over.
 
-      Version: 1.1.0
+      Version: 1.1.0.1
     groups:
     - name: Templates
     items:

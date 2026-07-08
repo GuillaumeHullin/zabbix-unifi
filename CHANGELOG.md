@@ -2,6 +2,22 @@
 
 All notable changes to this template set are documented here. Versioning starts at 1.1.0 (2026-07-08); everything before that was tracked by date only, so those older entries are kept as-is rather than renumbered retroactively.
 
+## [1.1.0.1] - 2026-07-08
+
+A large expansion of per-port monitoring: SFP module metadata, full gateway SFP support (previously switch-only), port renaming/QoS visibility, and several new Ethernet-level fields - plus a template-wide `DISCARD_UNCHANGED_HEARTBEAT` consistency pass.
+
+### Added
+- SFP module metadata items: `Compliance`, `Part Number`, `Serial Number`, `Vendor`, `Revision` on switches; `Part Number`, `Serial Number`, `Vendor`, `EEPROM Readable` on gateways (gateways don't expose compliance/revision). An INFO alarm fires when a module's serial number changes, indicating a physical swap rather than a reseat.
+- Gateway SFP monitoring, previously switch-only: `Discover Gateway SFP Ports` (TX fault, RX loss-of-signal - the gateway-side equivalent of a switch's RX fault) and `Discover Gateway SFP Optical Ports` (temperature, RX/TX power, voltage, current). Gateways use different field names than switches (`sfp_tx_fault`/`sfp_rx_los` vs. `sfp_txfault`/`sfp_rxfault`) and don't expose an `sfp_compliance` field, so the optical/DAC split uses a part-number-prefix filter instead of the compliance field switches use.
+- `Port Name` item for every port (switch and gateway, not just SFP ones), with an INFO alarm when it changes - UniFi auto-renames a port after the connected device's hostname, so this tracks patching changes over time. Previously the port name only existed as a discovery-time label with no history.
+- New per-port Ethernet items, switch and gateway, informational unless noted: `Full Duplex`, `Autoneg`, `Is Uplink`, `Link Down Count` (cumulative flap counter), `MAC Table Count` (learned MAC addresses - spot an unexpected hub/switch downstream), `RX/TX Dropped` packets (**new WARNING alarm** if actively increasing, mirroring the existing TX/RX Errors pattern), `STP State` (**new WARNING alarm** if stuck on `blocking`, an active loop-prevention signal), `STP Edge Port`, and `QoS Mode` (surfaces Pro AV/traffic-control profiles like `aes67_audio`).
+
+### Fixed
+- Optical-only SFP items (`Temperature`, `RX/TX Power`, `Voltage`, `Current`) were previously created for every SFP-found port, including DAC (direct-attach copper) cables, which structurally can't report any of those values (no laser or photodiode). Confirmed live by comparing the same physical DAC cable from both ends (a gateway-to-switch uplink): identical missing fields on both sides. These items are now only discovered on non-DAC (fibre) modules; DAC ports still get the fault/info tier (TX fault, part number, serial, vendor, etc.), just not the optical measurements that can never populate.
+- Extended `DISCARD_UNCHANGED_HEARTBEAT` to 9 more slow-changing metadata items that were missing it inconsistently with their siblings (e.g. `UniFiOS Version` didn't have it while the equivalent per-device `Firmware Version` did): Hardware Type, Public IP Address, Hardware Serial Number, Unifi Stack status, UniFiOS Version, WAN IPv4 Address, WAN Speed Type, per-controller Version, and Radio Band. Items that directly drive an alarm as their primary state input (connection state, blocked, WAN enabled, outlet relay, RPS state, etc.) were deliberately left alone, so they keep a live timestamp at all times.
+
+---
+
 ## [1.1.0] - 2026-07-08
 
 Mostly about false-positive alerts caused by transient local/cloud API failures, the UniFi API returning consoles outside a key's configured scope, and an easier way to set shared local credentials. No template architecture changes.
@@ -13,6 +29,7 @@ Mostly about false-positive alerts caused by transient local/cloud API failures,
 - UniFi's Site Manager API does not enforce an API key's configured site restrictions on `/v1/hosts` or `/v1/sites` - both endpoints always return every console on the account regardless of the key's configured scope (confirmed via direct testing with a site-restricted key). Added `{$UNIFI.SITE.EXCLUDE}`, a client-side workaround macro that filters excluded consoles (matched by hostname, full host ID, or host ID prefix) out of discovery before they're turned into Zabbix hosts. ([#1](../../issues/1))
 - Local controller raw items (gateway, UAP, USW, UPS, RPS) no longer treat a failed login/request (timeouts, `429` rate limiting, etc.) as "device not found." Previously, any request failure was silently converted into an empty/fake successful response, which downstream items read as the device being offline, causing false "offline - not seen by local controller" and false `0`-value readings during ordinary network blips or controller rate limiting. A failed poll is now simply skipped (last known value is kept) rather than misreported.
 - Confirmed via live testing against a real console: 10 concurrent local controller logins returned `429` on 7 of them, explaining why consoles with many devices (each device independently logging in every poll cycle) were seeing periodic false-offline flapping lasting close to the old 5-poll persistence window.
+- Fixed the trigger-prototype dependency on the offline triggers, which requires matching the target's `recovery_expression` exactly, not just name and expression, or Zabbix reports the dependency as "does not exist" on import.
 - Per-port `Satisfaction` items (switch and gateway) had no `value_type` set, defaulting to Numeric (unsigned), which can't store the `-1` fallback used when a port doesn't expose this field. Every device-level `Satisfaction` item already correctly used `FLOAT`; the port-level ones just missed it. Confirmed live that some switch models (e.g. `US24PRO`) never expose per-port satisfaction at all, regardless of link state, so this fallback path is hit routinely, not just on edge cases.
 
 ### Changed

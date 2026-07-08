@@ -408,6 +408,27 @@ Severities follow standard Zabbix conventions: INFO < WARNING < AVERAGE < HIGH <
 | Shadow Mode peer IP changed | INFO | HA peer management IP changed |
 | Local firmware version changed | INFO | Local controller firmware version changed |
 
+### Gateway Switch Ports (discovered automatically)
+
+Most UniFi gateways (UDM/UXG) have a built-in switch, so their physical ports get the same port-level monitoring as a dedicated switch, sourced from the same local controller data as everything else in this section.
+
+| Alarm | Severity | Fires when |
+|-------|----------|-----------|
+| Gateway port down | WARNING | Port transitions from up to down after previously being up |
+| Gateway port TX errors increasing | WARNING | TX error counter is actively incrementing |
+| Gateway port RX errors increasing | WARNING | RX error counter is actively incrementing |
+| Gateway port RX dropped packets increasing | WARNING | RX dropped-packet counter is actively incrementing |
+| Gateway port TX dropped packets increasing | WARNING | TX dropped-packet counter is actively incrementing |
+| Gateway port STP blocking | WARNING | Spanning Tree is actively blocking this port to prevent a loop |
+| Gateway SFP TX fault active | HIGH | Module reports a transmit fault |
+| Gateway SFP RX loss of signal | HIGH | Module isn't detecting a receive signal (the gateway-side equivalent of a switch's RX fault) |
+| Gateway SFP temperature critical/high | HIGH/WARNING | SFP module temp exceeds `{$UNIFI.SFP.TEMP.HIGH}` / `{$UNIFI.SFP.TEMP.WARN}` |
+| Gateway SFP RX/TX power critical/low | HIGH/WARNING | Optical power exceeds the same `{$UNIFI.SFP.*}` thresholds used on switches |
+| Gateway port renamed | INFO | Port name changed in UniFi |
+| Gateway SFP module changed | INFO | Module serial number changed, indicating a physical swap |
+
+> Gateways expose SFP module status/metadata (TX fault, RX loss-of-signal, part number, serial, vendor) for any inserted module, DAC or fibre, but optical measurements (temperature, RX/TX power, voltage, current) only for fibre modules, same DAC/fibre split as switches - see the note under [Switches (USW)](#switches-usw). Other per-port items with no alarm: `Satisfaction`, `Anomalies`, `Full Duplex`, `Autoneg`, `Is Uplink`, `Link Down Count`, `MAC Table Count`, `STP Edge Port`, `QoS Mode`, `EEPROM Readable` (SFP).
+
 ### Per-WAN (discovered automatically via two LLD rules)
 
 WAN uptime and latency are sourced from the **local controller** (`/stat/health`), which provides a true 24-hour rolling window and per-WAN latency readings. Downtime and packet loss period counts are sourced from the **cloud API** (`/v1/sites`), which tracks individual outage events at ~5-minute granularity.
@@ -517,6 +538,9 @@ The following alarms come from the **Ubiquiti UniFi USW** template (local contro
 | Port down | WARNING | Port transitions from up to down after previously being up |
 | Port TX errors increasing | WARNING | TX error counter is actively incrementing |
 | Port RX errors increasing | WARNING | RX error counter is actively incrementing |
+| Port RX dropped packets increasing | WARNING | RX dropped-packet counter is actively incrementing (congestion/buffer, not physical layer) |
+| Port TX dropped packets increasing | WARNING | TX dropped-packet counter is actively incrementing |
+| Port STP blocking | WARNING | Spanning Tree is actively blocking this port to prevent a loop |
 | SFP temperature high | WARNING | SFP module temp > `{$UNIFI.SFP.TEMP.WARN}`°C |
 | SFP RX power low | WARNING | Received optical power < `{$UNIFI.SFP.RXPOWER.LOW.WARN}` dBm |
 | SFP TX power low | WARNING | Transmit laser output < `{$UNIFI.SFP.TXPOWER.LOW.WARN}` dBm |
@@ -525,10 +549,14 @@ The following alarms come from the **Ubiquiti UniFi USW** template (local contro
 | Device no longer managed | AVERAGE | Device has been removed from management |
 | Firmware update available (cloud) | INFO | Cloud API reports a newer version is available |
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
+| Port renamed | INFO | Port name changed in UniFi (e.g. auto-named after a newly connected device) |
+| SFP module changed | INFO | Module serial number changed, indicating a physical swap rather than a reseat |
 
 > **Port down alarms** resolve immediately if the port comes back up. If the port remains down, the alarm auto-resolves after 24 hours. Operators can also close it manually for ports that are intentionally unused.
 
-> **SFP monitoring** is discovered automatically. Items are only created for ports where `sfp_found = true` (i.e. a module is physically inserted). Voltage and laser current are logged for trending but have no alarm thresholds by default. All SFP alarms are suppressed if the device is offline. Supported models: any USW with SFP/SFP+ ports (confirmed on USW-Pro-Aggregation `USAGGPRO`).
+> **SFP monitoring** is discovered automatically and split into two tiers. Fault/metadata items (TX/RX fault, compliance, part number, serial, vendor, revision) are created for any port where `sfp_found = true`, including DAC (direct-attach copper) cables. Optical measurements (temperature, RX/TX power, voltage, current) are only created on non-DAC (fibre) modules, since DAC cables have no laser or photodiode and structurally cannot report those values - confirmed live by checking the same physical DAC cable from both ends. Voltage and laser current are logged for trending but have no alarm thresholds by default. All SFP alarms are suppressed if the device is offline. Supported models: any USW with SFP/SFP+ ports (confirmed on USW-Pro-Aggregation `USAGGPRO`).
+
+> **Other per-port items** with no alarm attached, purely for visibility: `Anomalies`, `Full Duplex`, `Autoneg`, `Is Uplink`, `Link Down Count` (cumulative flap counter), `MAC Table Count` (learned MAC addresses on the port), `STP Edge Port`, and `QoS Mode` (surfaces Pro AV/traffic-control profiles such as `aes67_audio`).
 
 ### UPS (Uninterruptible Power Supply)
 
