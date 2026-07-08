@@ -2,6 +2,8 @@
 
 A comprehensive Zabbix 7.0 template set for monitoring Ubiquiti UniFi infrastructure via both the UniFi Site Manager cloud API and local controller endpoints. Provides unified visibility across gateways, access points, switches, UPS units, and redundant power supplies.
 
+See [CHANGELOG.md](CHANGELOG.md) for what's changed between versions.
+
 ---
 
 ## Contents
@@ -9,6 +11,7 @@ A comprehensive Zabbix 7.0 template set for monitoring Ubiquiti UniFi infrastruc
 - [Overview](#overview)
 - [Requirements](#requirements)
 - [Template Architecture](#template-architecture)
+- [Polling Architecture](#polling-architecture)
 - [Getting Started](#getting-started)
   - [1. Obtain a Cloud API Key](#1-obtain-a-cloud-api-key)
   - [2. Prepare Local Controller Credentials](#2-prepare-local-controller-credentials)
@@ -87,6 +90,76 @@ Ubiquiti UniFi API          <- Assign this to a single Zabbix host
 
 ---
 
+## Polling Architecture
+
+```
+                    api.ui.com (UniFi Site Manager cloud)
+                                    |
+        +-------------------------------------------------------+
+        |  Root host (1x globally, every 1m)                    |
+        |    GET /v1/hosts            -> unifi.api.hosts        |
+        |    GET /v1/sd-wan-configs   -> unifi.sdwan.configs    |
+        +-------------------------------------------------------+
+                                    |
+                     (each console independently re-fetches its
+                      own record - see limitation below)
+                                    v
+        +-------------------------------------------------------+
+        |  Console host (1x per console, every 1m)               |
+        |    GET /v1/hosts/{hostId}    -> unifi.api.hosts        |
+        |    GET /v1/devices?hostId=X  -> unifi.api.host.devices |
+        |    GET /v1/sites?hostIds=X   -> unifi.api.host.sites   |
+        +-------------------------------------------------------+
+                                    |
+                     (each device independently re-fetches the
+                      same device list - see limitation below)
+                                    v
+        +-------------------------------------------------------+
+        |  Per-device host (Ubiquiti UniFi Device template)      |
+        |    GET /v1/devices?hostId=X  -> unifi.api.device.raw   |
+        +-------------------------------------------------------+
+
+
+                    Local controller (per console, HTTPS 443)
+                                    |
+        +-------------------------------------------------------+
+        |  Console host (1x per console, every 3m)               |
+        |    POST /api/auth/login                                |
+        |    GET  /proxy/network/api/s/default/stat/health       |
+        |    GET  /proxy/network/api/s/default/stat/device       |
+        |    GET  /proxy/network/api/s/default/rest/.../shadow   |
+        |    GET  /api/system                                    |
+        |      --> unifi.local.all                                |
+        +-------------------------------------------------------+
+                                    |
+                     (each device independently logs in and
+                      re-fetches the same device list)
+                                    v
+        +-------------------------------------------------------+
+        |  Per-device host (UAP / USW / UPS / RPS template)      |
+        |    POST /api/auth/login + GET .../stat/device           |
+        |      --> unifi.uap.device / usw.device /                |
+        |          ups.device / rps.device                        |
+        +-------------------------------------------------------+
+                                    |
+                     DEPENDENT items only from here down
+                                    v
+        Per-port / per-radio / per-outlet / per-SFP discovery
+        and metrics (switch ports, AP radios, UPS outlets, RPS
+        ports) derive from the per-device fetch above - no
+        further API calls.
+```
+
+**Known limitation: redundant local/cloud calls per device.** Every device host (AP/switch/UPS/RPS) logs into the local controller and fetches the cloud `/v1/devices` list itself, even though its own console already pulled that exact data for its own metrics. On a console with 12 devices that's 12+ separate logins hitting the same controller every cycle, and we've seen it actually trip UniFi's local rate limit in testing (10 concurrent logins to a real console came back `429` on 7 of them).
+
+We looked at fixing this properly, twice. The first idea was having each device pull the console's already-fetched data instead of re-fetching it, but Zabbix won't allow it: `DEPENDENT` items require the master item to be on the same host, and `CALCULATED` items need a literal host name baked into the formula at save time, before macros are even resolved. Since console and device host names only exist once LLD discovers them, there's no way to point at a "future" host from a formula. The second idea was smaller: merge each device's local and cloud raw items into one, purely to cut Zabbix item count. That's technically possible, but it doesn't reduce a single actual HTTP request (still one login, one local fetch, one cloud fetch, whichever item they're wrapped in), and it would couple two failure modes that are usefully independent today. Not worth it.
+
+The only way to genuinely eliminate the redundant calls is a bigger change: turning per-device metrics into LLD item prototypes that live on the console host, instead of giving each device its own Zabbix host. That's a real architecture change, not a drop-in fix, so it's parked rather than attempted here.
+
+None of this causes bad alerting, though. A rate-limited or failed local poll is just skipped rather than misread as "offline" (see [Troubleshooting](#troubleshooting)), so the cost of this limitation is some wasted controller load, not false alarms.
+
+---
+
 ## Getting Started
 
 ### 1. Obtain a Cloud API Key
@@ -97,10 +170,10 @@ The template authenticates to the UniFi Site Manager API using an API key.
 2. In the **left sidebar**, click **API Keys**
 3. Click **Create New API Key**
 4. Enter a descriptive name (e.g. `Zabbix`)
-5. Set an **Expiration** — select **Never Expires** for a long-lived monitoring key, or at minimum **1 Year**
+5. Set an **Expiration**: select **Never Expires** for a long-lived monitoring key, or at minimum **1 Year**
 6. Under **Applications**, ensure both **Site Manager** and **UniFi Applications** are checked
 7. Under **Sites**, select **All Sites** (or restrict to the specific sites you wish to monitor)
-8. Click **Create** and copy the key — it is only shown once
+8. Click **Create** and copy the key. It's only shown once, so save it somewhere safe.
 
 > The API key is passed as an `X-API-KEY` header on all requests to `api.ui.com`. It does not grant access to local controller endpoints.
 
@@ -112,18 +185,18 @@ Local polling hits each console's UniFi OS controller directly over HTTPS (port 
 
 **To create a local read-only account:**
 
-1. Log in to [unifi.ui.com](https://unifi.ui.com) and open the **Network** app for the site, or navigate directly to the console's IP address (e.g. `https://10.1.1.1`) — the steps are identical either way
+1. Log in to [unifi.ui.com](https://unifi.ui.com) and open the **Network** app for the site, or navigate directly to the console's IP address (e.g. `https://10.1.1.1`). Either way works the same.
 2. In the **left sidebar**, click the **People** icon (the group icon near the bottom of the sidebar)
 3. Click **Create New** → **Create New User**
-4. Enter a **First Name** and **Last Name** for the account (e.g. `Zabbix` / `Monitor`) — email is not required
-5. Check the **Admin** checkbox — this reveals **Username**, **Password**, and role fields
+4. Enter a **First Name** and **Last Name** for the account (e.g. `Zabbix` / `Monitor`); email isn't required
+5. Check the **Admin** checkbox to reveal **Username**, **Password**, and role fields
 6. Enter a username (e.g. `zabbix-viewonly`) and a strong password; leave **Super Admin** unchecked
 7. Set both role dropdowns to **View Only**
-8. Leave **Groups** empty — no group membership is needed
-9. In the **Assignments** section, **uncheck** both **Network** and **One-Click VPN** — these control cloud/Fabric app access, which a local monitoring account does not need
+8. Leave **Groups** empty, no group membership is needed
+9. In the **Assignments** section, **uncheck** both **Network** and **One-Click VPN**. These control cloud/Fabric app access, which a local monitoring account doesn't need.
 10. Click **Create**
 
-Repeat this process for each console you wish to monitor locally. The account credentials are entered as Zabbix macros in [Step 7](#7-configure-per-host-macros).
+Repeat this process for each console you wish to monitor locally, using the same username/password everywhere if that's practical for your environment. The account credentials are entered as Zabbix macros. If every site shares the same credentials, set them **once** on the root host in [Step 5](#5-configure-host-macros) instead of per console; a per-console override in [Step 7](#7-configure-per-host-macros) still works for any site that needs different credentials.
 
 **Permissions required:**
 - View Only access to the Network application (devices, health, port stats)
@@ -136,7 +209,7 @@ No write permissions are needed or recommended.
 
 1. In Zabbix, navigate to **Data collection > Templates**
 2. Click **Import**
-3. Upload `UnfiZabbixAPI.yaml`
+3. Upload `zbx_template_unifi.yaml`
 4. Ensure all checkboxes are ticked (Templates, Items, Triggers, etc.)
 5. Click **Import**
 
@@ -173,6 +246,15 @@ Optional threshold overrides (defaults are suitable for most deployments):
 | `{$WAN_UPTIME_WARN}` | `99` | Site-wide combined WAN uptime % for AVERAGE alarm |
 | `{$WAN_UPTIME_HIGH}` | `95` | Site-wide combined WAN uptime % for DISASTER alarm |
 
+**If every site shares the same local controller credentials**, set them once now instead of repeating [Step 7](#7-configure-per-host-macros) per console, on this same root host:
+
+| Macro | Value | Notes |
+|-------|-------|-------|
+| `{$UNIFI.USERNAME}` | `zabbix-viewer` | Local controller read-only username |
+| `{$UNIFI.PASSWORD}` | `your-password` | Use **Secret text** type |
+
+Every console discovered from this point on inherits these automatically. To use different credentials for a specific site, override `{$UNIFI.USERNAME}` / `{$UNIFI.PASSWORD}` on that console's own host (Step 7); a host-level value always wins over the inherited one. Setting the default here, on the root *host* rather than a template, means it survives re-importing an updated version of this template in future.
+
 ---
 
 ### 6. Run Discovery
@@ -195,12 +277,16 @@ After a few minutes, new hosts will appear for each discovered console, pre-popu
 
 ### 7. Configure Per-Host Macros
 
-Each discovered console host requires local controller credentials. Open each console host, go to the **Macros** tab, and set:
+If you set a shared default in [Step 5](#5-configure-host-macros), every discovered console already has working local credentials and you can skip this unless a specific site needs different ones.
+
+To override credentials for one console, open that console host, go to its **Macros** tab, and set:
 
 | Macro | Value | Notes |
 |-------|-------|-------|
 | `{$UNIFI.USERNAME}` | `zabbix-viewer` | Local controller read-only username |
 | `{$UNIFI.PASSWORD}` | `your-password` | Use **Secret text** type |
+
+A host-level value here always takes priority over the root host's default, for just this one console.
 
 Common optional overrides:
 
@@ -216,14 +302,16 @@ Common optional overrides:
 
 ## Macros Reference
 
-### Global (Root Template — Ubiquiti UniFi API)
+### Global (Root Template: Ubiquiti UniFi API)
 
 | Macro | Default | Description |
 |-------|---------|-------------|
 | `{$APIKEY}` | *(secret)* | UniFi Site Manager API key |
+| `{$UNIFI.USERNAME}` | *(empty)* | Default local controller username, propagated to every discovered console - see [Step 5](#5-configure-host-macros) |
+| `{$UNIFI.PASSWORD}` | *(secret)* | Default local controller password, propagated to every discovered console |
 | `{$WAN_UPTIME_WARN}` | `99` | Site-wide combined WAN uptime AVERAGE threshold (%) |
 | `{$WAN_UPTIME_HIGH}` | `95` | Site-wide combined WAN uptime DISASTER threshold (%) |
-| `{$UNIFI.SITE.EXCLUDE}` | *(empty)* | Comma-separated consoles to exclude from discovery — see [Site Discovery Filtering](#site-discovery-filtering) |
+| `{$UNIFI.SITE.EXCLUDE}` | *(empty)* | Comma-separated consoles to exclude from discovery, see [Site Discovery Filtering](#site-discovery-filtering) |
 
 ### Per-Console Host (Ubiquiti UniFi API Host)
 
@@ -231,20 +319,20 @@ Common optional overrides:
 |-------|---------|-------------|
 | `{$APIKEY}` | *(secret)* | Inherited or overridden API key |
 | `{$UNIFI.LOCAL.IP}` | *(auto)* | Console management IP - set by discovery |
-| `{$UNIFI.USERNAME}` | *(empty)* | Local controller read-only username |
-| `{$UNIFI.PASSWORD}` | *(secret)* | Local controller password |
+| `{$UNIFI.USERNAME}` | *(auto)* | Local controller read-only username - inherited from the root host at discovery time, or overridden here |
+| `{$UNIFI.PASSWORD}` | *(auto)* | Local controller password - inherited from the root host at discovery time, or overridden here |
 | `{$UNIFI.API.AUTH.URI}` | `api/auth/login` | Login endpoint |
 | `{$UNIFI.API.AUTH.TOKEN}` | `TOKEN` | Session cookie name |
 | `{$UNIFI.API.URI}` | `proxy/network/api/s/default/stat` | Stats endpoint |
 | `{$UNIFI.API.REST.URI}` | `proxy/network/api/s/default/rest` | REST endpoint |
 | `{$HOSTID}` | *(auto)* | Console UUID from cloud - set by discovery |
 | `{$BACKUP_INTERVAL}` | `8d` | Expected maximum time between backups |
-| `{$WAN_UPTIME_NOTICE}` | `99.9` | Per-WAN 24h availability WARNING threshold (%) — ~1.4 min/day |
-| `{$WAN_UPTIME_WARN}` | `99` | Per-WAN 24h availability AVERAGE threshold (%) — ~14 min/day |
-| `{$WAN_UPTIME_HIGH}` | `98` | Per-WAN 24h availability HIGH threshold — 0% fires a separate alarm |
+| `{$WAN_UPTIME_NOTICE}` | `99.9` | Per-WAN 24h availability WARNING threshold (%), about 1.4 min/day |
+| `{$WAN_UPTIME_WARN}` | `99` | Per-WAN 24h availability AVERAGE threshold (%), about 14 min/day |
+| `{$WAN_UPTIME_HIGH}` | `98` | Per-WAN 24h availability HIGH threshold (0% fires a separate alarm) |
 | `{$UNIFI.WAN.LATENCY.WARN}` | `100` | WAN latency warning threshold (ms) |
 | `{$UNIFI.WAN.ENABLED}` | `1` | Master WAN alarm switch (1=enabled, 0=suppressed for all WANs) |
-| `{$UNIFI.WAN.ENABLED:WAN2}` | `1` | WAN2-specific alarm switch — set to 0 to suppress all WAN2 alarms |
+| `{$UNIFI.WAN.ENABLED:WAN2}` | `1` | WAN2-specific alarm switch, set to 0 to suppress all WAN2 alarms |
 | `{$UNIFI.CPU.USAGE.WARN}` | `80` | CPU usage warning threshold (%) |
 | `{$UNIFI.CPU.USAGE.HIGH}` | `90` | CPU usage critical threshold (%) |
 | `{$UNIFI.MEM.USAGE.WARN}` | `80` | Memory usage warning threshold (%) |
@@ -258,16 +346,16 @@ Common optional overrides:
 |-------|---------|-------------|
 | `{$UNIFI.UPTIME.WARN}` | `24` | Uptime warning threshold (hours) - alarms if uptime is below this after a reboot |
 | `{$UNIFI.CPU.USAGE.WARN}` | `80` | CPU warning (%) |
-| `{$UNIFI.CPU.USAGE.HIGH}` | `90` | CPU critical (%) — UAP/USW only |
+| `{$UNIFI.CPU.USAGE.HIGH}` | `90` | CPU critical (%), UAP/USW only |
 | `{$UNIFI.MEM.USAGE.WARN}` | `80` | Memory warning (%) |
-| `{$UNIFI.MEM.USAGE.HIGH}` | `90` | Memory critical (%) — UAP/USW only |
-| `{$UNIFI.TEMP.WARN}` | `55` | Temperature warning (°C) — RPS only |
-| `{$UNIFI.TEMP.HIGH}` | `65` | Temperature critical (°C) — RPS only |
+| `{$UNIFI.MEM.USAGE.HIGH}` | `90` | Memory critical (%), UAP/USW only |
+| `{$UNIFI.TEMP.WARN}` | `55` | Temperature warning (°C), RPS only |
+| `{$UNIFI.TEMP.HIGH}` | `65` | Temperature critical (°C), RPS only |
 | `{$UNIFI.UPS.BATTERY.WARN}` | `20` | UPS battery warning threshold (%) |
 | `{$UNIFI.UPS.BATTERY.HIGH}` | `10` | UPS battery critical threshold (%) |
 | `{$UNIFI.UPS.RUNTIME.HIGH}` | `300` | UPS runtime critical threshold (seconds) |
 
-### Per-SFP Port (USW — discovered automatically for ports with `sfp_found = true`)
+### Per-SFP Port (USW, discovered automatically for ports with `sfp_found = true`)
 
 | Macro | Default | Description |
 |-------|---------|-------------|
@@ -320,14 +408,14 @@ Severities follow standard Zabbix conventions: INFO < WARNING < AVERAGE < HIGH <
 | Shadow Mode peer IP changed | INFO | HA peer management IP changed |
 | Local firmware version changed | INFO | Local controller firmware version changed |
 
-### Per-WAN (discovered automatically — two LLD rules)
+### Per-WAN (discovered automatically via two LLD rules)
 
 WAN uptime and latency are sourced from the **local controller** (`/stat/health`), which provides a true 24-hour rolling window and per-WAN latency readings. Downtime and packet loss period counts are sourced from the **cloud API** (`/v1/sites`), which tracks individual outage events at ~5-minute granularity.
 
 Two sets of WAN items are discovered per gateway:
 
-- **Discover WAN Interfaces** (cloud API) — plugged state, enabled state, speed type, IPv4 address. These work even if the local controller is unreachable.
-- **Discover Host WAN Interfaces** (local API) — 24h uptime, latency, downtime periods, packet loss periods, external IP.
+- **Discover WAN Interfaces** (cloud API): plugged state, enabled state, speed type, IPv4 address. These work even if the local controller is unreachable.
+- **Discover Host WAN Interfaces** (local API): 24h uptime, latency, downtime periods, packet loss periods, external IP.
 
 | Alarm | Severity | Fires when |
 |-------|----------|-----------|
@@ -349,7 +437,7 @@ Two sets of WAN items are discovered per gateway:
 
 | Alarm | Severity | Fires when |
 |-------|----------|-----------|
-| Site has no gateway device | DISASTER | Gateway device count = 0 — all routing is down |
+| Site has no gateway device | DISASTER | Gateway device count = 0, all routing is down |
 | Site aggregate WAN uptime critical | DISASTER | Combined WAN uptime < `{$WAN_UPTIME_HIGH}`% |
 | Site has critical notification(s) in UniFi | AVERAGE | UniFi is reporting one or more critical notifications |
 | Site aggregate WAN uptime degraded | AVERAGE | Combined WAN uptime < `{$WAN_UPTIME_WARN}`% |
@@ -365,11 +453,11 @@ Two sets of WAN items are discovered per gateway:
 
 ### SD-WAN
 
-Tunnel severity is proportional to actual impact. A dual-WAN spoke losing one WAN drops some tunnels but remains connected via its other WAN — that is HIGH, not DISASTER. DISASTER only fires when a site is completely cut off or a hub loses all spoke connections.
+Tunnel severity is proportional to actual impact. A dual-WAN spoke losing one WAN drops some tunnels but remains connected via its other WAN, so that's HIGH, not DISASTER. DISASTER only fires when a site is completely cut off or a hub loses all spoke connections.
 
 | Alarm | Severity | Fires when |
 |-------|----------|-----------|
-| Spoke(s) completely isolated — all tunnels down | DISASTER | One or more spokes have zero connected tunnels (all WANs lost) |
+| Spoke(s) completely isolated, all tunnels down | DISASTER | One or more spokes have zero connected tunnels (all WANs lost) |
 | Hub(s) have no active spoke connections | DISASTER | A hub has no spokes connected to it at all |
 | SD-WAN config errors | HIGH | Configuration has errors that may prevent tunnels establishing |
 | Hub WAN internet issues | HIGH | A hub site is reporting WAN internet issues |
@@ -395,7 +483,7 @@ The following alarms come from the **Ubiquiti UniFi UAP** template (local contro
 
 | Alarm | Severity | Fires when |
 |-------|----------|-----------|
-| Offline — not seen by local controller | HIGH | Device state ≠ 1 for 3 consecutive checks |
+| Offline - not seen by local controller | HIGH | Device state ≠ 1 (alarms and clears on a single poll, no persistence window) |
 | Device offline (cloud) | HIGH | Cloud API reports status = offline |
 | CPU usage critical | HIGH | CPU > `{$UNIFI.CPU.USAGE.HIGH}`% |
 | Memory usage critical | HIGH | Memory > `{$UNIFI.MEM.USAGE.HIGH}`% |
@@ -403,7 +491,7 @@ The following alarms come from the **Ubiquiti UniFi UAP** template (local contro
 | CPU usage high | WARNING | CPU > `{$UNIFI.CPU.USAGE.WARN}`% |
 | Memory usage high | WARNING | Memory > `{$UNIFI.MEM.USAGE.WARN}`% |
 | Firmware upgrade available | WARNING | Local controller reports an upgrade is available |
-| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold — recent reboot |
+| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold, indicating a recent reboot |
 | Device no longer managed | AVERAGE | Device has been removed from management |
 | Firmware update available (cloud) | INFO | Cloud API reports a newer version is available |
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
@@ -415,15 +503,15 @@ The following alarms come from the **Ubiquiti UniFi USW** template (local contro
 
 | Alarm | Severity | Fires when |
 |-------|----------|-----------|
-| Offline — not seen by local controller | HIGH | Device state ≠ 1 for 3 consecutive checks |
+| Offline - not seen by local controller | HIGH | Device state ≠ 1 (alarms and clears on a single poll, no persistence window) |
 | Device offline (cloud) | HIGH | Cloud API reports status = offline |
 | CPU usage critical | HIGH | CPU > `{$UNIFI.CPU.USAGE.HIGH}`% |
 | Memory usage critical | HIGH | Memory > `{$UNIFI.MEM.USAGE.HIGH}`% |
-| SFP TX fault active | HIGH | Module reports a transmit laser fault — likely failed SFP or broken TX fibre |
-| SFP RX fault active | HIGH | Module reports a receive fault — likely broken RX fibre or failed remote laser |
+| SFP TX fault active | HIGH | Module reports a transmit laser fault, likely a failed SFP or broken TX fibre |
+| SFP RX fault active | HIGH | Module reports a receive fault, likely a broken RX fibre or failed remote laser |
 | SFP temperature critical | HIGH | SFP module temp > `{$UNIFI.SFP.TEMP.HIGH}`°C |
-| SFP RX power critical low | HIGH | Received optical power < `{$UNIFI.SFP.RXPOWER.LOW.HIGH}` dBm — near receiver limit |
-| SFP TX power critical low | HIGH | Transmit laser output < `{$UNIFI.SFP.TXPOWER.LOW.HIGH}` dBm — laser likely failing |
+| SFP RX power critical low | HIGH | Received optical power < `{$UNIFI.SFP.RXPOWER.LOW.HIGH}` dBm, near receiver limit |
+| SFP TX power critical low | HIGH | Transmit laser output < `{$UNIFI.SFP.TXPOWER.LOW.HIGH}` dBm, laser likely failing |
 | CPU usage high | WARNING | CPU > `{$UNIFI.CPU.USAGE.WARN}`% |
 | Memory usage high | WARNING | Memory > `{$UNIFI.MEM.USAGE.WARN}`% |
 | Port down | WARNING | Port transitions from up to down after previously being up |
@@ -433,7 +521,7 @@ The following alarms come from the **Ubiquiti UniFi USW** template (local contro
 | SFP RX power low | WARNING | Received optical power < `{$UNIFI.SFP.RXPOWER.LOW.WARN}` dBm |
 | SFP TX power low | WARNING | Transmit laser output < `{$UNIFI.SFP.TXPOWER.LOW.WARN}` dBm |
 | Firmware upgrade available | WARNING | Local controller reports an upgrade is available |
-| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold — recent reboot |
+| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold, indicating a recent reboot |
 | Device no longer managed | AVERAGE | Device has been removed from management |
 | Firmware update available (cloud) | INFO | Cloud API reports a newer version is available |
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
@@ -448,16 +536,16 @@ The following alarms come from the **Ubiquiti UniFi UPS** template (local contro
 
 | Alarm | Severity | Fires when |
 |-------|----------|-----------|
-| Offline — not seen by local controller | HIGH | Device state ≠ 1 for 3 consecutive checks |
+| Offline - not seen by local controller | HIGH | Device state ≠ 1 (alarms and clears on a single poll, no persistence window) |
 | Device offline (cloud) | HIGH | Cloud API reports status = offline |
 | Battery level critical | HIGH | Battery < `{$UNIFI.UPS.BATTERY.HIGH}`% |
 | Battery runtime critical | HIGH | Remaining runtime < `{$UNIFI.UPS.RUNTIME.HIGH}` seconds |
-| Running on battery — mains power failed | HIGH | UPS is in battery mode |
+| Running on battery, mains power failed | HIGH | UPS is in battery mode |
 | Battery level low | WARNING | Battery < `{$UNIFI.UPS.BATTERY.WARN}`% |
 | Outlet lost power | WARNING | Outlet relay state = off |
 | CPU usage high | WARNING | CPU > `{$UNIFI.CPU.USAGE.WARN}`% |
 | Memory usage high | WARNING | Memory > `{$UNIFI.MEM.USAGE.WARN}`% |
-| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold — recent reboot |
+| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold, indicating a recent reboot |
 | Device no longer managed | AVERAGE | Device has been removed from management |
 | Firmware update available (cloud) | INFO | Cloud API reports a newer version is available |
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
@@ -469,19 +557,19 @@ The following alarms come from the **Ubiquiti UniFi RPS** template (local contro
 
 | Alarm | Severity | Fires when |
 |-------|----------|-----------|
-| RPS delivering 12V — connected device PSU failed | DISASTER | RPS is actively supplying 12V to a device |
-| RPS delivering 54V — connected device PSU failed | DISASTER | RPS is actively supplying 54V (PoE) to a device |
-| RPS port ACTIVE — primary PSU failed on connected device | DISASTER | RPS port has taken over from a failed PSU |
-| Offline — not seen by local controller | HIGH | Device state ≠ 1 for 3 consecutive checks |
+| RPS delivering 12V, connected device PSU failed | DISASTER | RPS is actively supplying 12V to a device |
+| RPS delivering 54V, connected device PSU failed | DISASTER | RPS is actively supplying 54V (PoE) to a device |
+| RPS port ACTIVE, primary PSU failed on connected device | DISASTER | RPS port has taken over from a failed PSU |
+| Offline - not seen by local controller | HIGH | Device state ≠ 1 (alarms and clears on a single poll, no persistence window) |
 | Device offline (cloud) | HIGH | Cloud API reports status = offline |
 | Temperature critical | HIGH | Temp > `{$UNIFI.TEMP.HIGH}`°C |
 | Temperature high | WARNING | Temp > `{$UNIFI.TEMP.WARN}`°C |
-| RPS port disconnected — redundancy lost | WARNING | Port is not connected; device has no redundant power path |
+| RPS port disconnected, redundancy lost | WARNING | Port is not connected; device has no redundant power path |
 
-> **RPS port discovery** only creates items for ports that have a connected device. Ports with a generic name (e.g. `Port 1`, `Port 2`) are filtered out — this is by design, as those ports have nothing plugged in yet. Once a device is connected, the RPS names the port after the device's hostname (e.g. `FRN1CORESW01`), and it is automatically discovered on the next LLD cycle.
+> **RPS port discovery** only creates items for ports that have a connected device. Ports with a generic name (e.g. `Port 1`, `Port 2`) are filtered out by design, since those ports have nothing plugged in yet. Once a device is connected, the RPS names the port after the device's hostname (e.g. `FRN1CORESW01`), and it's automatically discovered on the next LLD cycle.
 | CPU usage high | WARNING | CPU > `{$UNIFI.CPU.USAGE.WARN}`% |
 | Memory usage high | WARNING | Memory > `{$UNIFI.MEM.USAGE.WARN}`% |
-| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold — recent reboot |
+| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold, indicating a recent reboot |
 | Device no longer managed | AVERAGE | Device has been removed from management |
 | Firmware update available (cloud) | INFO | Cloud API reports a newer version is available |
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
@@ -491,7 +579,7 @@ The following alarms come from the **Ubiquiti UniFi RPS** template (local contro
 
 ## Site Discovery Filtering
 
-The UniFi Site Manager API does not currently enforce an API key's configured "Sites" restriction on the `GET /v1/hosts` and `GET /v1/sites` endpoints — both always return every console on the account, regardless of which sites the key is scoped to in the UniFi UI. Since the template relies on these endpoints for host discovery, a restricted API key will still cause every console on the account to be discovered.
+The UniFi Site Manager API does not currently enforce an API key's configured "Sites" restriction on the `GET /v1/hosts` and `GET /v1/sites` endpoints. Both always return every console on the account, regardless of which sites the key is scoped to in the UniFi UI. Since the template relies on these endpoints for host discovery, a restricted API key will still cause every console on the account to be discovered.
 
 `{$UNIFI.SITE.EXCLUDE}` is a client-side workaround: a comma-separated list of consoles to drop before host prototypes are created. Each entry can be any of:
 
@@ -549,23 +637,24 @@ No additional configuration is required - HA status is detected automatically fr
 - Confirm the Zabbix server/proxy can reach that IP on port 443
 - Check `{$UNIFI.USERNAME}` and `{$UNIFI.PASSWORD}` are set and the account exists locally on that console
 - Some consoles require the account to have logged in via the UI at least once before API auth succeeds
-- Brief timeouts (10s) are expected if the console temporarily loses management connectivity — these clear automatically
+- Brief timeouts (10s) are expected if the console temporarily loses management connectivity; these clear automatically
 
 **WAN uptime or latency shows 0 / incorrect values**
 - Both items are sourced from the local controller (`/stat/health`). If the local controller is unreachable, they fall back to safe defaults (100% / 0ms) until the connection recovers
 - Confirm `Local Health Raw` is collecting successfully under **Monitoring > Latest data**
 
 **WAN2 alarms on a single-WAN gateway**
-- Set host macro `{$UNIFI.WAN.ENABLED:WAN2}=0` — see [WAN Alarm Suppression](#wan-alarm-suppression)
+- Set host macro `{$UNIFI.WAN.ENABLED:WAN2}=0`, see [WAN Alarm Suppression](#wan-alarm-suppression)
 
 **False reboot alarms on newly-discovered devices**
 - The startup time trigger requires the stored timestamp to change by more than 5 minutes, filtering polling jitter
-- If still noisy on first discovery, acknowledge and close — the alarm only fires on genuine changes thereafter
+- If still noisy on first discovery, acknowledge and close; the alarm only fires on genuine changes thereafter
 
 **Port error alarms that won't clear automatically**
 - Port TX/RX error triggers use cumulative counters and are marked `manual_close`
 - Acknowledge and close the alarm in Zabbix once the underlying issue is resolved
 
 **HTTP 429 errors from the local controller**
-- All local device polls default to 4-minute intervals to stay within the controller's rate limits
-- If 429s persist, increase the interval on the affected master item via a host-level item override
+- Every device host logs into the local controller independently (see [Polling Architecture](#polling-architecture) for why), so a console with many devices can occasionally trip UniFi's own local rate limiting
+- This no longer causes false "offline" alarms: a rate-limited poll is simply skipped rather than misread as the device being down, so a `429` on its own is not something you need to act on
+- If they're frequent enough to worry about, the only real fix is reducing how many devices share one console, or increasing the local poll interval (default 3 minutes) on the affected device templates

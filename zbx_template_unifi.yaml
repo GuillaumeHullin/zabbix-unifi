@@ -24,6 +24,8 @@ zabbix_export:
       Zabbix UniFi API monitoring template for UniFi Site Manager API v1 (https://developer.ui.com/site-manager/v1.0.0/gettingstarted)
 
       Template available at https://github.com/kairandles/zabbix-unifi
+
+      Version: 1.1.0
     groups:
     - name: Templates
     items:
@@ -45,24 +47,6 @@ zabbix_export:
       tags:
       - tag: component
         value: raw
-    - uuid: f6a5b7efa43e467db3ce58f2d67280f6
-      name: 'Unifi API Raw: Devices'
-      type: HTTP_AGENT
-      key: unifi.api.devices
-      delay: 1m
-      history: '0'
-      value_type: TEXT
-      trends: '0'
-      url: https://api.ui.com/v1/devices
-      timeout: 15s
-      headers:
-      - name: Accept
-        value: application/json
-      - name: x-api-key
-        value: '{$APIKEY}'
-      tags:
-      - tag: component
-        value: raw
     - uuid: c4d2c6f96b2a4a859c07bf58f96b8287
       name: 'Unifi SD-WAN Raw: Configs List'
       type: HTTP_AGENT
@@ -72,24 +56,6 @@ zabbix_export:
       value_type: TEXT
       trends: '0'
       url: https://api.ui.com/v1/sd-wan-configs
-      timeout: 15s
-      headers:
-      - name: Accept
-        value: application/json
-      - name: x-api-key
-        value: '{$APIKEY}'
-      tags:
-      - tag: component
-        value: raw
-    - uuid: 020a80b4e4db471da397db6f152651d7
-      name: 'Unifi API Raw: Sites'
-      type: HTTP_AGENT
-      key: unifi.api.sites
-      delay: 1m
-      history: '0'
-      value_type: TEXT
-      trends: '0'
-      url: https://api.ui.com/v1/sites
       timeout: 15s
       headers:
       - name: Accept
@@ -130,11 +96,11 @@ zabbix_export:
           value: '{#LOCALIP}'
           description: Local management IP of this console (e.g. 10.183.200.1)
         - macro: '{$UNIFI.USERNAME}'
-          value: ''
-          description: UniFi local controller read-only username
+          value: '{#USERNAME}'
+          description: Local controller username, inherited from the root host's default at discovery time
         - macro: '{$UNIFI.PASSWORD}'
-          value: ''
-          description: UniFi local controller password
+          value: '{#PASSWORD}'
+          description: Local controller password, inherited from the root host's default at discovery time
           type: SECRET_TEXT
         custom_interfaces: 'YES'
         interfaces:
@@ -152,6 +118,10 @@ zabbix_export:
         path: $.localIp
       - lld_macro: '{#SITENAME}'
         path: $.siteName
+      - lld_macro: '{#USERNAME}'
+        path: $.username
+      - lld_macro: '{#PASSWORD}'
+        path: $.password
       preprocessing:
       - type: JSONPATH
         parameters:
@@ -198,6 +168,9 @@ zabbix_export:
               // Derive site name from hostname: "Randles-Family-SC-186" -> "Randles-Family"
               var siteName = hostname.replace(/-SC-[0-9]+$/, '').replace(/-CGU$/, '');
               obj[i].siteName = siteName || hostname;
+              // Propagate the root host's default local credentials to each discovered console
+              obj[i].username = '{$UNIFI.USERNAME}';
+              obj[i].password = '{$UNIFI.PASSWORD}';
               delete obj[i].reportedState.controllers;
               delete obj[i].features;
               delete obj[i].userData;
@@ -239,6 +212,13 @@ zabbix_export:
     - macro: '{$APIKEY}'
       type: SECRET_TEXT
       description: API Key to access api.ui.com
+    - macro: '{$UNIFI.USERNAME}'
+      description: Default local controller read-only username, propagated to every discovered console unless overridden
+        on that console's own host. Set this here (not on the template) so it survives re-importing the template.
+    - macro: '{$UNIFI.PASSWORD}'
+      type: SECRET_TEXT
+      description: Default local controller password, propagated to every discovered console unless overridden on that
+        console's own host. Set this here (not on the template) so it survives re-importing the template.
     - macro: '{$WAN_UPTIME_WARN}'
       value: '99'
       description: 'WAN uptime % below which AVERAGE alert fires (default: 99%)'
@@ -262,7 +242,9 @@ zabbix_export:
     description: |
       Zabbix UniFi API monitoring template for UniFi Site Manager API v1 (https://developer.ui.com/site-manager/v1.0.0/gettingstarted). Used by hosts discovered in Ubiquiti UniFi API.
 
-      Template available at https://github.com/StreetKidsDirect/UnifiAPI-Zabbix
+      Template available at https://github.com/kairandles/zabbix-unifi
+
+      Version: 1.1.0
     groups:
     - name: Templates
     items:
@@ -768,7 +750,7 @@ zabbix_export:
               });
           } catch(e) {
               Zabbix.log(4, '[UniFi local.all] ' + e);
-              return '{"health":{"data":[]},"device":{"data":[]},"shadow":{"data":[{}]},"system":{"portStatus":[]}}';
+              throw e;
           }
       tags:
       - tag: component
@@ -890,12 +872,14 @@ zabbix_export:
         value: Local Gateway
       triggers:
       - uuid: bba557db9982415dab92a469be4aaaf9
-        expression: find(/Ubiquiti UniFi API Host/unifi.local.wan.status,#1,"regexp","^ok$")<>1 and nodata(/Ubiquiti 
+        expression: find(/Ubiquiti UniFi API Host/unifi.local.wan.status,#1,"regexp","^ok$")<>1 and nodata(/Ubiquiti
           UniFi API Host/unifi.local.wan.status,5m)=0
+        recovery_mode: RECOVERY_EXPRESSION
+        recovery_expression: find(/Ubiquiti UniFi API Host/unifi.local.wan.status,#1,"regexp","^ok$")=1
         name: 'WAN status is not OK: {ITEM.LASTVALUE}'
         priority: HIGH
-        description: The local controller is reporting the WAN as not in an 'ok' state. The current status is shown in 
-          the trigger value. This may indicate the WAN link is physically down, the gateway cannot reach the internet, 
+        description: The local controller is reporting the WAN as not in an 'ok' state. The current status is shown in
+          the trigger value. This may indicate the WAN link is physically down, the gateway cannot reach the internet,
           or the ISP connection is in a degraded state.
     - uuid: b522b3579a3a40b1b646f934917070d3
       name: WAN IP
@@ -1748,10 +1732,31 @@ zabbix_export:
         key: unifi.gw.port.satisfaction[{#PORTID}]
         delay: '0'
         history: 90d
+        value_type: FLOAT
         preprocessing:
         - type: JSONPATH
           parameters:
           - $.data[0].port_table[?(@.port_idx=={#PORTID})].satisfaction.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '-1'
+        master_item:
+          key: unifi.local.gw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 3a5bb869129f4c39812a4f336ed11683
+        name: GW Port {#PORTID} ({#PORTNAME}) Anomalies
+        type: DEPENDENT
+        key: unifi.gw.port.anomalies[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].anomalies.first()
           error_handler: CUSTOM_VALUE
           error_handler_params: '-1'
         master_item:
@@ -3201,10 +3206,12 @@ zabbix_export:
     - macro: '{$UNIFI.LOCAL.IP}'
       description: Local management IP of this console - populated from host discovery
     - macro: '{$UNIFI.USERNAME}'
-      description: UniFi local controller read-only username
+      description: Local controller username - inherited from the root host's default at discovery time, or set here
+        to override for this specific console
     - macro: '{$UNIFI.PASSWORD}'
       type: SECRET_TEXT
-      description: UniFi local controller password
+      description: Local controller password - inherited from the root host's default at discovery time, or set here
+        to override for this specific console
     - macro: '{$UNIFI.API.AUTH.URI}'
       value: api/auth/login
       description: Local controller login endpoint
@@ -3252,8 +3259,11 @@ zabbix_export:
   - uuid: 9f31dca95c604276bf46b013d9bdbd49
     template: Ubiquiti UniFi SD-WAN
     name: Ubiquiti UniFi SD-WAN
-    description: Applied to SD-WAN config hosts discovered by Ubiquiti UniFi API. Monitors tunnel health, configuration 
+    description: |
+      Applied to SD-WAN config hosts discovered by Ubiquiti UniFi API. Monitors tunnel health, configuration
       status, and WAN internet issues for each SD-WAN config via /v1/sd-wan-configs/{id}/status.
+
+      Version: 1.1.0
     groups:
     - name: Templates
     items:
@@ -3563,7 +3573,9 @@ zabbix_export:
       Monitors device status, firmware, version, uptime, and IP via cloud API.
       Macros {$HOSTID} and {$DEVICEID} are set automatically by the discovering gateway's host prototype.
 
-      Template available at https://github.com/StreetKidsDirect/UnifiAPI-Zabbix
+      Version: 1.1.0
+
+      Template available at https://github.com/kairandles/zabbix-unifi
     groups:
     - name: Templates
     items:
@@ -3866,8 +3878,11 @@ zabbix_export:
   - uuid: 226f2a3ed5884856b08373c9caff1bdf
     template: Ubiquiti UniFi UAP
     name: Ubiquiti UniFi UAP
-    description: Local controller polling for UniFi Access Points. Applied alongside Ubiquiti UniFi Device by host 
+    description: |
+      Local controller polling for UniFi Access Points. Applied alongside Ubiquiti UniFi Device by host
       prototype discovery.
+
+      Version: 1.1.0
     groups:
     - name: Templates
     items:
@@ -3907,7 +3922,7 @@ zabbix_export:
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi UAP] ' + e);
-              return '{"data":[]}';
+              throw e;
           }
       tags:
       - tag: component
@@ -3934,7 +3949,9 @@ zabbix_export:
         value: uap
       triggers:
       - uuid: a284c526cefe4d14bb5ad82ef30b416d
-        expression: min(/Ubiquiti UniFi UAP/unifi.uap.state,#5)<>1
+        expression: last(/Ubiquiti UniFi UAP/unifi.uap.state)<>1
+        recovery_mode: RECOVERY_EXPRESSION
+        recovery_expression: last(/Ubiquiti UniFi UAP/unifi.uap.state)=1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         description: The local UniFi controller is reporting this device as offline (state ≠ 1). The device may have 
@@ -4272,7 +4289,8 @@ zabbix_export:
           priority: HIGH
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi UAP/unifi.uap.state,#5)<>1
+            expression: last(/Ubiquiti UniFi UAP/unifi.uap.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi UAP/unifi.uap.state)=1
           description: The {#RADIONAME} radio on this access point is not in a running state. Clients on this frequency 
             band will be unable to connect to this AP. A reboot usually recovers a stuck radio; if the issue recurs, the
             AP may need a firmware update or hardware replacement.
@@ -4409,8 +4427,11 @@ zabbix_export:
   - uuid: ae887645c1f94cf7a5bcc02a5110494d
     template: Ubiquiti UniFi USW
     name: Ubiquiti UniFi USW
-    description: Local controller polling for UniFi Switches. Applied alongside Ubiquiti UniFi Device by host prototype 
+    description: |
+      Local controller polling for UniFi Switches. Applied alongside Ubiquiti UniFi Device by host prototype
       discovery.
+
+      Version: 1.1.0
     groups:
     - name: Templates
     items:
@@ -4450,7 +4471,7 @@ zabbix_export:
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi USW] ' + e);
-              return '{"data":[]}';
+              throw e;
           }
       tags:
       - tag: component
@@ -4477,7 +4498,9 @@ zabbix_export:
         value: usw
       triggers:
       - uuid: bbe2ee3a0ab34a9b8e7944f5ee31781c
-        expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+        expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+        recovery_mode: RECOVERY_EXPRESSION
+        recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         dependencies:
@@ -4687,7 +4710,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Switch port {#PORTID} ({#PORTNAME}) has gone down after previously being up - the connected
             device has lost network connectivity. Check the cable, the NIC on the connected device, and PoE status
             if this is a powered port. Resolves immediately if the port comes back up, or automatically after 24
@@ -4784,7 +4808,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Transmit errors are actively increasing on switch port {#PORTID} ({#PORTNAME}). This typically
             indicates a physical layer issue such as a faulty cable, a duplex mismatch, or a failing NIC on the
             connected device. Replace the cable first as it is the most common cause. Error count resets on device reboot.
@@ -4816,7 +4841,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Receive errors are actively increasing on switch port {#PORTID} ({#PORTNAME}). Common causes
             include a damaged cable, a failing SFP module, or a faulty NIC on the connected device. Replace the cable
             or SFP first, then investigate the connected device. Error count resets on device reboot.
@@ -4847,10 +4873,31 @@ zabbix_export:
         key: unifi.usw.port.satisfaction[{#PORTID}]
         delay: '0'
         history: 90d
+        value_type: FLOAT
         preprocessing:
         - type: JSONPATH
           parameters:
           - $.data[0].port_table[?(@.port_idx=={#PORTID})].satisfaction.first()
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '-1'
+        master_item:
+          key: unifi.usw.device
+        tags:
+        - tag: component
+          value: port
+        - tag: port
+          value: '{#PORTID}'
+      - uuid: 39ba148de8fd4ee5b35f97a6c6086553
+        name: Port {#PORTID} ({#PORTNAME}) Anomalies
+        type: DEPENDENT
+        key: unifi.usw.port.anomalies[{#PORTID}]
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.data[0].port_table[?(@.port_idx=={#PORTID})].anomalies.first()
           error_handler: CUSTOM_VALUE
           error_handler_params: '-1'
         master_item:
@@ -4914,7 +4961,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) is reporting a transmit fault. This typically
             indicates a failed or failing laser, a faulty SFP module, or a broken fibre on the TX strand. The
             link will likely be down. Replace the SFP module and check the fibre patch lead.
@@ -4947,7 +4995,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) is reporting a receive fault. This typically
             indicates the RX fibre strand is disconnected, dirty, or broken, or the remote TX laser has failed.
             Check the fibre patch lead and clean both connectors.
@@ -4980,7 +5029,8 @@ zabbix_export:
           priority: HIGH
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) has exceeded the critical temperature
             threshold ({$UNIFI.SFP.TEMP.HIGH}°C). At this temperature optical output power degrades and module
             failure is likely. Ensure the switch has adequate airflow and modules are not blocking ventilation.
@@ -4992,7 +5042,8 @@ zabbix_export:
           priority: WARNING
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: The SFP module on port {#PORTID} ({#PORTNAME}) is above the warning temperature threshold
             ({$UNIFI.SFP.TEMP.WARN}°C). Commercial-grade SFP+ modules are typically rated to 70°C. Monitor for
             further increases and check for blocked airflow.
@@ -5026,7 +5077,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Received optical power on port {#PORTID} ({#PORTNAME}) is critically low
             ({$UNIFI.SFP.RXPOWER.LOW.HIGH} dBm threshold). The link is near receiver sensitivity and bit errors
             are likely. Check for a dirty or damaged fibre connector, excessive bend radius, or a failing
@@ -5040,7 +5092,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Received optical power on port {#PORTID} ({#PORTNAME}) is below the warning threshold
             ({$UNIFI.SFP.RXPOWER.LOW.WARN} dBm). Signal degradation may cause intermittent errors under load.
             Clean both fibre connectors and check for excessive bend radius or damaged patch leads.
@@ -5074,7 +5127,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Transmit laser power on port {#PORTID} ({#PORTNAME}) is critically low
             ({$UNIFI.SFP.TXPOWER.LOW.HIGH} dBm threshold). The module laser is likely failing. Plan a
             replacement — a module at this level may be causing signal loss at the far end even if no RX
@@ -5088,7 +5142,8 @@ zabbix_export:
           manual_close: 'YES'
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi USW/unifi.usw.state,#5)<>1
+            expression: last(/Ubiquiti UniFi USW/unifi.usw.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi USW/unifi.usw.state)=1
           description: Transmit laser output on port {#PORTID} ({#PORTNAME}) is below the warning threshold
             ({$UNIFI.SFP.TXPOWER.LOW.WARN} dBm). This may indicate a degrading laser. A continuing drop will
             eventually cause link errors at the far end.
@@ -5207,8 +5262,11 @@ zabbix_export:
   - uuid: ed8f0edb07ac4bdcbd4a698d2df76649
     template: Ubiquiti UniFi UPS
     name: Ubiquiti UniFi UPS
-    description: Local controller polling for USW-Deployed-24 (USWDA) with battery backup. Applied alongside Ubiquiti 
+    description: |
+      Local controller polling for USW-Deployed-24 (USWDA) with battery backup. Applied alongside Ubiquiti
       UniFi Device by host prototype discovery.
+
+      Version: 1.1.0
     groups:
     - name: Templates
     items:
@@ -5248,7 +5306,7 @@ zabbix_export:
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi UPS] ' + e);
-              return '{"data":[]}';
+              throw e;
           }
       tags:
       - tag: component
@@ -5275,7 +5333,9 @@ zabbix_export:
         value: ups
       triggers:
       - uuid: af4f82d3a48c4a42b0d2546947357f13
-        expression: min(/Ubiquiti UniFi UPS/unifi.ups.state,#5)<>1
+        expression: last(/Ubiquiti UniFi UPS/unifi.ups.state)<>1
+        recovery_mode: RECOVERY_EXPRESSION
+        recovery_expression: last(/Ubiquiti UniFi UPS/unifi.ups.state)=1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         dependencies:
@@ -5507,7 +5567,8 @@ zabbix_export:
           priority: WARNING
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi UPS/unifi.ups.state,#5)<>1
+            expression: last(/Ubiquiti UniFi UPS/unifi.ups.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi UPS/unifi.ups.state)=1
           description: Outlet {#OUTLETID} ({#OUTLETNAME}) on this UPS is no longer energised. The device connected to 
             this outlet has lost power. Possible causes include an overload trip, a manual disable via the UniFi 
             interface, or a firmware fault. Check the outlet state in UniFi and the load on this outlet.
@@ -5573,8 +5634,11 @@ zabbix_export:
   - uuid: e1400fdb307647e1ad77662c37800555
     template: Ubiquiti UniFi RPS
     name: Ubiquiti UniFi RPS
-    description: Local controller polling for USP-RPS (Redundant Power Supply). Monitors PSU failover state - DISASTER 
+    description: |
+      Local controller polling for USP-RPS (Redundant Power Supply). Monitors PSU failover state - DISASTER
       fires when a connected device loses its primary PSU and the RPS takes over.
+
+      Version: 1.1.0
     groups:
     - name: Templates
     items:
@@ -5614,7 +5678,7 @@ zabbix_export:
               return JSON.stringify({data: dev});
           } catch(e) {
               Zabbix.log(4, '[UniFi RPS] ' + e);
-              return '{"data":[]}';
+              throw e;
           }
       tags:
       - tag: component
@@ -5641,7 +5705,9 @@ zabbix_export:
         value: rps
       triggers:
       - uuid: 6a492342ccee4822b11dbfbe9a8a00a8
-        expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#5)<>1
+        expression: last(/Ubiquiti UniFi RPS/unifi.rps.state)<>1
+        recovery_mode: RECOVERY_EXPRESSION
+        recovery_expression: last(/Ubiquiti UniFi RPS/unifi.rps.state)=1
         name: '{HOST.NAME} offline - not seen by local controller'
         priority: HIGH
         dependencies:
@@ -5933,7 +5999,8 @@ zabbix_export:
             PSU.
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#5)<>1
+            expression: last(/Ubiquiti UniFi RPS/unifi.rps.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi RPS/unifi.rps.state)=1
       - uuid: 8bc2cde8e674465aa2040d1404fa90e2
         name: RPS Port {#RPSPORTID} ({#RPSPORTNAME}) Delivering
         type: DEPENDENT
@@ -5984,7 +6051,8 @@ zabbix_export:
           priority: WARNING
           dependencies:
           - name: '{HOST.NAME} offline - not seen by local controller'
-            expression: min(/Ubiquiti UniFi RPS/unifi.rps.state,#5)<>1
+            expression: last(/Ubiquiti UniFi RPS/unifi.rps.state)<>1
+            recovery_expression: last(/Ubiquiti UniFi RPS/unifi.rps.state)=1
           description: RPS port {#RPSPORTID} ({#RPSPORTNAME}) is no longer connected. The device on this port has no 
             redundant power supply protection - if its primary PSU now fails, it will lose power with no failover. Check
             the RPS cable connection from the RPS unit to the device.
