@@ -160,8 +160,29 @@ zabbix_export:
         parameters:
         - |
           var obj = JSON.parse(value);
+          // Workaround: the UniFi API does not enforce an API key's configured
+          // site restrictions on /v1/hosts or /v1/sites - they always return every
+          // console on the account. This macro lets you exclude sites client-side.
+          var excludeRaw = '{$UNIFI.SITE.EXCLUDE}';
+          var excluded = [];
+          if (excludeRaw && excludeRaw.trim().length > 0) {
+              var parts = excludeRaw.split(',');
+              for (var e = 0; e < parts.length; e++) {
+                  var t = parts[e].trim();
+                  if (t.length > 0) { excluded.push(t); }
+              }
+          }
+          var result = [];
           for (var i = 0; i < Object.keys(obj).length; i++) {
               var rs = obj[i].reportedState || {};
+              var hostname = (rs.hostname || '');
+              var hostId = (obj[i].id || '');
+              var hostIdPrefix = hostId.split(':')[0];
+              if (excluded.indexOf(hostname) !== -1 ||
+                  excluded.indexOf(hostId) !== -1 ||
+                  excluded.indexOf(hostIdPrefix) !== -1) {
+                  continue;
+              }
               var addrs = rs.ipAddrs || [];
               var localIp = '';
               var prefixes = ['10.', '192.168.', '172.'];
@@ -175,14 +196,14 @@ zabbix_export:
               }
               obj[i].localIp = localIp;
               // Derive site name from hostname: "Randles-Family-SC-186" -> "Randles-Family"
-              var hostname = (rs.hostname || '');
               var siteName = hostname.replace(/-SC-[0-9]+$/, '').replace(/-CGU$/, '');
               obj[i].siteName = siteName || hostname;
               delete obj[i].reportedState.controllers;
               delete obj[i].features;
               delete obj[i].userData;
+              result.push(obj[i]);
           }
-          return JSON.stringify(obj);
+          return JSON.stringify(result);
     - uuid: d7997156360b41d7af58cde5af9b4be0
       name: Discover SD-WAN Configs
       type: DEPENDENT
@@ -228,6 +249,13 @@ zabbix_export:
       value: '150'
       description: 'Latency threshold in ms for WARNING alert. Raise to 200+ for Central America sites where 60-80ms to UK
         is normal (default: 150)'
+    - macro: '{$UNIFI.SITE.EXCLUDE}'
+      value: ''
+      description: 'Comma-separated list of consoles to exclude from discovery. Workaround for the UniFi API not enforcing
+        an API key''s configured site restrictions on /v1/hosts and /v1/sites - those endpoints always return every console
+        on the account regardless of key scope. Accepts any of: the console hostname (e.g. "MyConsole"), the
+        full host ID as it appears in the unifi.ui.com console URL (e.g. "AABBCCDDEEFF00000000000000000000000000000000000000000000112233:1234567890"),
+        or just the ID portion before the colon (e.g. "AABBCCDDEEFF00000000000000000000000000000000000000000000112233").'
   - uuid: d8cf0c6a2d19418b8e7c2adcb9c2b4c1
     template: Ubiquiti UniFi API Host
     name: Ubiquiti UniFi API Host

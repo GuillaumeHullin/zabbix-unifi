@@ -19,6 +19,7 @@ A comprehensive Zabbix 7.0 template set for monitoring Ubiquiti UniFi infrastruc
   - [7. Configure Per-Host Macros](#7-configure-per-host-macros)
 - [Macros Reference](#macros-reference)
 - [Alarms Reference](#alarms-reference)
+- [Site Discovery Filtering](#site-discovery-filtering)
 - [WAN Alarm Suppression](#wan-alarm-suppression)
 - [High Availability (Shadow Mode)](#high-availability-shadow-mode)
 - [Troubleshooting](#troubleshooting)
@@ -222,6 +223,7 @@ Common optional overrides:
 | `{$APIKEY}` | *(secret)* | UniFi Site Manager API key |
 | `{$WAN_UPTIME_WARN}` | `99` | Site-wide combined WAN uptime AVERAGE threshold (%) |
 | `{$WAN_UPTIME_HIGH}` | `95` | Site-wide combined WAN uptime DISASTER threshold (%) |
+| `{$UNIFI.SITE.EXCLUDE}` | *(empty)* | Comma-separated consoles to exclude from discovery — see [Site Discovery Filtering](#site-discovery-filtering) |
 
 ### Per-Console Host (Ubiquiti UniFi API Host)
 
@@ -484,6 +486,22 @@ The following alarms come from the **Ubiquiti UniFi RPS** template (local contro
 | Firmware update available (cloud) | INFO | Cloud API reports a newer version is available |
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
 | Firmware version changed | INFO | Firmware version changed |
+
+---
+
+## Site Discovery Filtering
+
+The UniFi Site Manager API does not currently enforce an API key's configured "Sites" restriction on the `GET /v1/hosts` and `GET /v1/sites` endpoints — both always return every console on the account, regardless of which sites the key is scoped to in the UniFi UI. Since the template relies on these endpoints for host discovery, a restricted API key will still cause every console on the account to be discovered.
+
+`{$UNIFI.SITE.EXCLUDE}` is a client-side workaround: a comma-separated list of consoles to drop before host prototypes are created. Each entry can be any of:
+
+- The console hostname, as shown in Site Manager (e.g. `MyConsole`)
+- The full host ID, copied from the console's URL at `unifi.ui.com/consoles/<host-id>/network/default` (e.g. `AABBCCDDEEFF00000000000000000000000000000000000000000000112233:1234567890`)
+- Just the ID portion before the colon (e.g. `AABBCCDDEEFF00000000000000000000000000000000000000000000112233`)
+
+Forms can be mixed in one value, e.g. `MyConsole,AABBCCDDEEFF00000000000000000000000000000000000000000000112233`.
+
+Set this on the root host (**Data collection > Hosts > Ubiquiti UniFi API > Macros**), then re-run discovery. It's empty by default, so nothing is filtered unless configured.
 
 ---
 
