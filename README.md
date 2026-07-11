@@ -1,6 +1,6 @@
 # Zabbix Template: Ubiquiti UniFi API
 
-A comprehensive Zabbix 7.0 template set for monitoring Ubiquiti UniFi infrastructure via both the UniFi Site Manager cloud API and local controller endpoints. Provides unified visibility across gateways, access points, switches, UPS units, and redundant power supplies.
+A comprehensive Zabbix 7.0 template set for monitoring Ubiquiti UniFi infrastructure via both the UniFi Site Manager cloud API and local controller endpoints. Provides unified visibility across gateways, access points, switches, UPS units, redundant power supplies, and UniFi Protect cameras/NVRs.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's changed between versions.
 
@@ -45,6 +45,8 @@ This template set bridges the UniFi Site Manager cloud API (`api.ui.com`) with l
 - Per-SFP port temperature, RX/TX optical power (dBm), voltage, current, and TX/RX fault state
 - UPS battery level, runtime, mains state, and outlet relay state
 - Redundant Power Supply failover and port redundancy state
+- UniFi Protect camera connectivity, recording-gap detection, and firmware state
+- UniFi Protect NVR storage utilization, database/disk health, and recording status
 - Cloud and local controller health checks for all discovered hosts
 
 ---
@@ -66,27 +68,31 @@ The Zabbix server (or proxy) must have HTTPS access to:
 
 ## Template Architecture
 
-The YAML file contains eight linked templates. You only assign one manually - everything else is created by LLD discovery.
+The YAML file contains ten linked templates. You only assign one manually - everything else is created by LLD discovery.
 
 ```
 Ubiquiti UniFi API          <- Assign this to a single Zabbix host
   |
   +-- [LLD] Discover Hosts
   |     +-- Ubiquiti UniFi API Host    (one host per console)
-  |           +-- [LLD] Discover UAP Devices   --> Ubiquiti UniFi Device + Ubiquiti UniFi UAP
-  |           +-- [LLD] Discover USW Devices   --> Ubiquiti UniFi Device + Ubiquiti UniFi USW
-  |           +-- [LLD] Discover UPS Devices   --> Ubiquiti UniFi Device + Ubiquiti UniFi UPS
-  |           +-- [LLD] Discover RPS Devices   --> Ubiquiti UniFi Device + Ubiquiti UniFi RPS
+  |           +-- [LLD] Discover UAP Devices        --> Ubiquiti UniFi Device + Ubiquiti UniFi UAP
+  |           +-- [LLD] Discover USW Devices        --> Ubiquiti UniFi Device + Ubiquiti UniFi USW
+  |           +-- [LLD] Discover UPS Devices        --> Ubiquiti UniFi Device + Ubiquiti UniFi UPS
+  |           +-- [LLD] Discover RPS Devices        --> Ubiquiti UniFi Device + Ubiquiti UniFi RPS
+  |           +-- [LLD] Discover Other Devices      --> Ubiquiti UniFi Device (generic; excludes Protect devices)
   |           +-- [LLD] Discover WAN Interfaces
   |           +-- [LLD] Discover Host WAN Interfaces (uptime/latency via local API)
   |           +-- [LLD] Discover Site Statistics
   |           +-- [LLD] Discover Host Controllers
+  |           +-- [LLD] Discover Protect Storage Disks   (item prototypes on the console host itself)
+  |           +-- [LLD] Discover Host Protect Cameras    --> Ubiquiti UniFi Protect Camera
+  |           +-- [LLD] Discover Host Protect Other      --> Ubiquiti UniFi Protect Device (chimes, etc.)
   |
   +-- [LLD] Discover SD-WAN Configs
         +-- Ubiquiti UniFi SD-WAN      (one host per SD-WAN config)
 ```
 
-**Ubiquiti UniFi Device** is a shared base template applied alongside all device-type templates (UAP/USW/UPS/RPS). It provides cloud-side firmware status, reboot detection, and managed state monitoring. Alarms from this base template apply to all device types.
+**Ubiquiti UniFi Device** is a shared base template applied alongside all Network device-type templates (UAP/USW/UPS/RPS). It provides cloud-side firmware status, reboot detection, and managed state monitoring. Alarms from this base template apply to all device types. **It is deliberately not applied to Protect cameras/devices** - UniFi Protect isn't part of the Network cloud fleet API this base template queries, so there's no cloud-side data for it to add; Protect device health comes entirely from the local Protect controller instead.
 
 ---
 
@@ -159,7 +165,7 @@ Ubiquiti UniFi API          <- Assign this to a single Zabbix host
         |    login, unless the token is rejected (see below)      |
         |      --> unifi.uap.device / usw.device /                |
         |          ups.device / rps.device                        |
-        |    every {$UNIFI.LOCAL.POLL.INTERVAL}, default 2m       |
+        |    every {$UNIFI.LOCAL.POLL.INTERVAL}, default 10s      |
         +-------------------------------------------------------+
                                     |
                      DEPENDENT items only from here down
@@ -180,6 +186,8 @@ Both consumers fall back to a one-off fresh login, just for that one poll, if th
 `{$UNIFI.SESSION.REFRESH.INTERVAL}`'s `10m` default is deliberately conservative rather than cut close to the session token's ~2 hour lifetime: the login itself is cheap (O(1) per console regardless of device count), but the exact trigger for UniFi's local rate limiting isn't fully characterized - testing confirmed it's tripped by concurrent logins, but a rolling per-time-window limit hasn't been ruled out, so refreshing every 10 minutes rather than every 1 keeps total login attempts an order of magnitude lower for no real cost (still a 12x safety margin against the token's own expiry, and new/renamed devices - discovered via this same item's cloud fetch - just take up to 10 minutes to show up instead of 1).
 
 All three poll intervals - `{$UNIFI.LOCAL.POLL.INTERVAL}` (per-device), `{$UNIFI.CONSOLE.POLL.INTERVAL}` (`unifi.local.all`), and `{$UNIFI.SESSION.REFRESH.INTERVAL}` (`unifi.host.session`) - flow through the same chain as `{$UNIFI.USERNAME}`/`{$UNIFI.PASSWORD}`: one real default on the root `Ubiquiti UniFi API` template, propagated to every console, and for the per-device one, propagated again from each console to its devices - so any of them can be changed once at the root for everything, or overridden at the console or device level. Unlike the credential macros, every tier this passes through also keeps its own real fallback value (matching the ordinary threshold macros like `{$UNIFI.CPU.USAGE.WARN}`), not just the root: an empty *credential* just fails a login cleanly, but an empty polling *interval* is a hard Zabbix configuration error (`Invalid update interval ""`), so there's always something valid to fall back to for the brief window before a freshly-imported host's discovery chain has fully propagated a real value down to it.
+
+**UniFi Protect rides the same token.** UniFi Protect's local API (`/proxy/protect/api/bootstrap`) accepts the exact same session cookie as the Network API, as long as the account also has Protect permission granted in UniFi OS (a separate, one-time grant - see [Step 2](#2-prepare-local-controller-credentials)). A new `CALCULATED` item, `unifi.protect.bootstrap`, reads the cached token via `last(//unifi.host.session)` (identical mechanism to `unifi.local.all` above) and fetches the Protect bootstrap payload on its own schedule (`{$UNIFI.CONSOLE.POLL.INTERVAL}`) - no separate login, no new credentials. Every Protect camera and NVR-level item then derives from that one fetch, the same way Network devices derive from `unifi.local.all`/`unifi.host.session`. On a console that doesn't run Protect at all, this item detects the resulting 404 and reports an empty result rather than erroring - most consoles in a mixed fleet (pure Network/SD-WAN gateways) will simply show zero Protect hosts with no noise.
 
 **Known limitation: redundant cloud calls per device.** Every device host still fetches the cloud `/v1/devices` list itself (`unifi.api.device.raw`), even though its own console already pulled that exact data. This is a smaller-impact limitation than the local logins above - cloud API calls aren't subject to the same aggressive rate limiting UniFi applies to local logins, so it hasn't caused practical problems the way local logins did. The same structural blocker applies here, with one nuance: `CALCULATED` items *can* read another item's last value without polling it (that's exactly what `unifi.local.all` now does, above) - but only from a host they can name, and the only host-naming options are a literal hostname or an empty host slot meaning "myself." Neither works across the console→device boundary, since a device can't hardcode its own dynamically-discovered console's hostname, and "myself" isn't the console. `DEPENDENT` items have the same problem: the master must be on the same host. The only way to genuinely eliminate this one is turning per-device metrics into LLD item prototypes living on the console host instead of giving each device its own Zabbix host - a real architecture change, parked rather than attempted here.
 
@@ -227,6 +235,7 @@ Repeat this process for each console you wish to monitor locally, using the same
 
 **Permissions required:**
 - View Only access to the Network application (devices, health, port stats)
+- **If you want Protect (camera/NVR) monitoring**, also set the **Protect** role dropdown (in the same Roles panel as Network) to **View Only**, then click through to actually save it. This is a separate grant from Network access - a console can run Protect with cameras adopted while this account still has zero Protect permission, and the account working fine for Network tells you nothing about whether Protect access is also granted. If `unifi.protect.bootstrap` (see [Troubleshooting](#troubleshooting)) reports `HTTP 403`, this is almost always why.
 
 No write permissions are needed or recommended.
 
@@ -240,7 +249,7 @@ No write permissions are needed or recommended.
 4. Ensure all checkboxes are ticked (Templates, Items, Triggers, etc.)
 5. Click **Import**
 
-All eight templates will appear in your template list.
+All ten templates will appear in your template list.
 
 ---
 
@@ -336,7 +345,7 @@ Common optional overrides:
 | `{$APIKEY}` | *(secret)* | UniFi Site Manager API key |
 | `{$UNIFI.USERNAME}` | *(empty)* | Default local controller username, propagated to every discovered console - see [Step 5](#5-configure-host-macros) |
 | `{$UNIFI.PASSWORD}` | *(secret)* | Default local controller password, propagated to every discovered console |
-| `{$UNIFI.LOCAL.POLL.INTERVAL}` | `2m` | Default per-device local poll interval, propagated to every discovered console and then on to every device - override at any tier (root, console, or device). Not a secret, so unlike username/password the real default lives directly on this template rather than requiring a root host override |
+| `{$UNIFI.LOCAL.POLL.INTERVAL}` | `10s` | Default per-device local poll interval, propagated to every discovered console and then on to every device - override at any tier (root, console, or device). Not a secret, so unlike username/password the real default lives directly on this template rather than requiring a root host override. Safe to poll this fast since no login is attached to this item (see [Polling Architecture](#polling-architecture)) - only the session-token refresh (`{$UNIFI.SESSION.REFRESH.INTERVAL}`, default 10m) actually logs in |
 | `{$UNIFI.CONSOLE.POLL.INTERVAL}` | `3m` | Default interval for each console's own combined local poll (`Local Raw (Combined)`, a `CALCULATED` item), propagated to every discovered console - override at the root or per-console. Safe to set much lower (e.g. `10s`) for fast WAN/health telemetry - this item doesn't log in itself, so its speed has no effect on login frequency (see [Polling Architecture](#polling-architecture)) |
 | `{$UNIFI.SESSION.REFRESH.INTERVAL}` | `10m` | Default interval for each console's session-token mint + cloud device fetch (`Local Session + Cloud Devices Raw`), propagated to every discovered console - override at the root or per-console. Deliberately conservative rather than cut close to the ~2 hour session token lifetime: the login is cheap either way, but UniFi's local rate limiter is only confirmed to trigger on concurrent logins, not proven safe against a sustained per-minute rate too, so this keeps total login attempts low regardless |
 | `{$WAN_UPTIME_WARN}` | `99` | Site-wide combined WAN uptime AVERAGE threshold (%) |
@@ -372,12 +381,20 @@ Common optional overrides:
 | `{$UNIFI.MEM.USAGE.HIGH}` | `90` | Memory usage critical threshold (%) |
 | `{$UNIFI.TEMP.WARN}` | `70` | Temperature warning threshold (°C) |
 | `{$UNIFI.TEMP.HIGH}` | `80` | Temperature critical threshold (°C) |
+| `{$UNIFI.PROTECT.API.URI}` | `proxy/protect/api` | Local Protect controller API base path |
+| `{$UNIFI.PROTECT.STORAGE.HIGH}` | `99` | Protect recording storage usage % HIGH threshold - deliberately high and single-tier, since continuous recording is designed to run near-full as a matter of course |
+| `{$UNIFI.PROTECT.DISK.TEMP.WARN}` | `60` | Protect NVR spinning disk temperature warning threshold (°C) - separate from `{$UNIFI.TEMP.WARN}` since HDD media runs at different temperatures than gateway hardware |
+| `{$UNIFI.PROTECT.DISK.TEMP.HIGH}` | `70` | Protect NVR spinning disk temperature critical threshold (°C) |
+| `{$UNIFI.PORT.DROPPED.WINDOW}` | `5m` | Time window for the gateway RX/TX dropped-packet rate check (see [Gateway Switch Ports](#gateway-switch-ports-discovered-automatically)) |
+| `{$UNIFI.PORT.DROPPED.WARN}` | `1000` | Gateway RX/TX dropped-packet count threshold within `{$UNIFI.PORT.DROPPED.WINDOW}` - starting default, tune to your own link's normal baseline |
 
 ### Per-Device (UAP / USW / UPS / RPS)
 
 | Macro | Default | Description |
 |-------|---------|-------------|
 | `{$UNIFI.UPTIME.WARN}` | `24` | Uptime warning threshold (hours) - alarms if uptime is below this after a reboot |
+| `{$UNIFI.PORT.DROPPED.WINDOW}` | `5m` | Time window for the switch RX/TX dropped-packet rate check (USW only) |
+| `{$UNIFI.PORT.DROPPED.WARN}` | `1000` | Switch RX/TX dropped-packet count threshold within `{$UNIFI.PORT.DROPPED.WINDOW}` - starting default, tune to your own link's normal baseline (USW only) |
 | `{$UNIFI.CPU.USAGE.WARN}` | `80` | CPU warning (%) |
 | `{$UNIFI.CPU.USAGE.HIGH}` | `90` | CPU critical (%), UAP/USW only |
 | `{$UNIFI.MEM.USAGE.WARN}` | `80` | Memory warning (%) |
@@ -387,6 +404,15 @@ Common optional overrides:
 | `{$UNIFI.UPS.BATTERY.WARN}` | `20` | UPS battery warning threshold (%) |
 | `{$UNIFI.UPS.BATTERY.HIGH}` | `10` | UPS battery critical threshold (%) |
 | `{$UNIFI.UPS.RUNTIME.HIGH}` | `300` | UPS runtime critical threshold (seconds) |
+
+### Per-Protect-Camera / Per-Protect-Device (Ubiquiti UniFi Protect Camera / Ubiquiti UniFi Protect Device)
+
+| Macro | Default | Description |
+|-------|---------|-------------|
+| `{$UNIFI.UPTIME.WARN}` | `24` | Uptime warning threshold (hours) - alarms if uptime is below this after a reboot |
+| `{$UNIFI.SESSION.TOKEN}` | *(auto)* | Cached local controller session token - inherited from the console, same mechanism as UAP/USW/UPS/RPS |
+| `{$UNIFI.LOCAL.POLL.INTERVAL}` | *(auto)* | Local poll interval - inherited from the console's default at discovery time, or overridden here |
+| `{$UNIFI.PROTECT.API.URI}` | `proxy/protect/api` | Local Protect controller API base path |
 
 ### Per-SFP Port (USW, discovered automatically for ports with `sfp_found = true`)
 
@@ -450,8 +476,8 @@ Most UniFi gateways (UDM/UXG) have a built-in switch, so their physical ports ge
 | Gateway port down | WARNING | Port transitions from up to down after previously being up |
 | Gateway port TX errors increasing | WARNING | TX error counter is actively incrementing |
 | Gateway port RX errors increasing | WARNING | RX error counter is actively incrementing |
-| Gateway port RX dropped packets increasing | WARNING | RX dropped-packet counter is actively incrementing |
-| Gateway port TX dropped packets increasing | WARNING | TX dropped-packet counter is actively incrementing |
+| Gateway port RX dropped packets elevated | WARNING | More than `{$UNIFI.PORT.DROPPED.WARN}` RX drops within `{$UNIFI.PORT.DROPPED.WINDOW}` - not any single increase, since a low steady trickle is normal |
+| Gateway port TX dropped packets elevated | WARNING | More than `{$UNIFI.PORT.DROPPED.WARN}` TX drops within `{$UNIFI.PORT.DROPPED.WINDOW}` - not any single increase, since a low steady trickle is normal |
 | Gateway port STP blocking | WARNING | Spanning Tree is actively blocking this port to prevent a loop |
 | Gateway SFP TX fault active | HIGH | Module reports a transmit fault |
 | Gateway SFP RX loss of signal | HIGH | Module isn't detecting a receive signal (the gateway-side equivalent of a switch's RX fault) |
@@ -461,6 +487,8 @@ Most UniFi gateways (UDM/UXG) have a built-in switch, so their physical ports ge
 | Gateway SFP module changed | INFO | Module serial number changed, indicating a physical swap |
 
 > Gateways expose SFP module status/metadata (TX fault, RX loss-of-signal, part number, serial, vendor) for any inserted module, DAC or fibre, but optical measurements (temperature, RX/TX power, voltage, current) only for fibre modules, same DAC/fibre split as switches - see the note under [Switches (USW)](#switches-usw). Other per-port items with no alarm: `Satisfaction`, `Anomalies`, `Full Duplex`, `Autoneg`, `Is Uplink`, `Link Down Count`, `MAC Table Count`, `STP Edge Port`, `QoS Mode`, `EEPROM Readable` (SFP).
+
+> **RX/TX dropped-packet tip:** these alarms fire on total growth within `{$UNIFI.PORT.DROPPED.WINDOW}` exceeding `{$UNIFI.PORT.DROPPED.WARN}`, not on any single increase - a low, steady trickle of drops is normal background behavior on a real link (congestion, buffer limits), not a fault. `1000`/`5m` is a starting default, not derived from a large sample of real links; if it fires too often (or not sensitively enough) on a specific port, check that port's RX/TX Dropped item in Latest data to see its actual normal rate and adjust the host-level macro accordingly.
 
 ### Per-WAN (discovered automatically via two LLD rules)
 
@@ -571,8 +599,8 @@ The following alarms come from the **Ubiquiti UniFi USW** template (local contro
 | Port down | WARNING | Port transitions from up to down after previously being up |
 | Port TX errors increasing | WARNING | TX error counter is actively incrementing |
 | Port RX errors increasing | WARNING | RX error counter is actively incrementing |
-| Port RX dropped packets increasing | WARNING | RX dropped-packet counter is actively incrementing (congestion/buffer, not physical layer) |
-| Port TX dropped packets increasing | WARNING | TX dropped-packet counter is actively incrementing |
+| Port RX dropped packets elevated | WARNING | More than `{$UNIFI.PORT.DROPPED.WARN}` RX drops within `{$UNIFI.PORT.DROPPED.WINDOW}` - not any single increase, since a low steady trickle is normal (congestion/buffer, not physical layer) |
+| Port TX dropped packets elevated | WARNING | More than `{$UNIFI.PORT.DROPPED.WARN}` TX drops within `{$UNIFI.PORT.DROPPED.WINDOW}` - not any single increase, since a low steady trickle is normal |
 | Port STP blocking | WARNING | Spanning Tree is actively blocking this port to prevent a loop |
 | SFP temperature high | WARNING | SFP module temp > `{$UNIFI.SFP.TEMP.WARN}`°C |
 | SFP RX power low | WARNING | Received optical power < `{$UNIFI.SFP.RXPOWER.LOW.WARN}` dBm |
@@ -635,6 +663,41 @@ The following alarms come from the **Ubiquiti UniFi RPS** template (local contro
 | Firmware update available (cloud) | INFO | Cloud API reports a newer version is available |
 | Device rebooted | INFO | Startup timestamp changed by more than 5 minutes |
 | Firmware version changed | INFO | Firmware version changed |
+
+### UniFi Protect (Cameras, NVR & Other Devices)
+
+Camera alarms come from the **Ubiquiti UniFi Protect Camera** template; the NVR-level alarms below come from the **Ubiquiti UniFi API Host** template (the same host already used for Network monitoring on that console - Protect's NVR state is added there, not to a separate host). Unlike UAP/USW/UPS/RPS, there is no cloud-side base template applied to Protect devices - Protect isn't part of the Network cloud fleet API, so there's no "offline (cloud)" cross-check available here.
+
+| Alarm | Severity | Fires when |
+|-------|----------|-----------|
+| Camera offline - not seen by Protect | HIGH | Camera state is not `CONNECTED` |
+| Protect detected a recording gap | HIGH | Protect's own gap detector (`isMissingRecordingDetected`) has flagged missed recording - already accounts for the camera's configured mode, so it won't false-fire on motion-only/scheduled cameras |
+| Protect database corruption detected | HIGH | NVR reports its recording database state as not `healthy` |
+| Protect recording is globally disabled | HIGH | NVR-wide recording toggle is off - no camera on the console is recording regardless of its own settings |
+| Protect storage critical | HIGH | Recording storage utilization > `{$UNIFI.PROTECT.STORAGE.HIGH}`% - deliberately high (99% default): continuous recording is designed to run near-full and auto-overwrite the oldest footage, so normal steady-state is commonly mid-to-high 90s and not itself a problem |
+| Protect disk not healthy / state not normal | HIGH | Per-disk health or state reported by the NVR is not the expected value |
+| Protect disk temperature critical | HIGH | Disk temperature > `{$UNIFI.PROTECT.DISK.TEMP.HIGH}`°C |
+| Protect disk array capability not ok | HIGH | The underlying disk/RAID array's own capability check (independent of Protect's own storage accounting) is not `ok` |
+| Camera recordings paused | WARNING | Recording explicitly paused for this camera - check the paused-reason item |
+| Protect camera license capacity not ok | WARNING | NVR's camera license/capacity state is not `ok` |
+| Protect disk has bad sector(s) | WARNING | Reallocated/bad sectors reported on an NVR disk |
+| Protect disk temperature high | WARNING | Disk temperature > `{$UNIFI.PROTECT.DISK.TEMP.WARN}`°C |
+| Protect reports camera(s) offline (NVR-side count) | WARNING | NVR's own aggregate offline-camera count is above zero - a belt-and-suspenders check alongside the per-camera trigger above |
+| Firmware upgrade available | WARNING | Local Protect controller reports an upgrade is available |
+| Uptime less than {$UNIFI.UPTIME.WARN}h | WARNING | Device uptime below threshold, indicating a recent reboot |
+| Protect hard drive not officially compatible | INFO | NVR reports the installed drive as unsupported (`hddNotCompatible`) - a compatibility/support notice, not an indicator of an active fault; cross-check the per-disk Health/State/Bad Sectors alarms above for actual drive problems |
+| Protect hard drive state changed | INFO | Safety net: fires on any change to the drive compatibility/health value, even ones not yet covered by a dedicated alarm |
+| Protect disk action in progress | INFO | NVR is actively performing an operation on a disk (e.g. a RAID rebuild) - check that disk's Rebuild Progress/Estimate items |
+| Protect disk serial number changed | INFO | A disk's reported serial number changed, indicating a physical drive swap - same idiom as the existing SFP module serial-change alarm |
+| SSH access enabled | INFO | Often a legitimate, intentional support toggle - informational only |
+
+> **Only one denylisted `hardDriveState` value is currently alarmed** (`hddNotCompatible`) - no confirmed "healthy" string has been observed to build a full allowlist against. The INFO change-tracking alarm above ensures any other value is still visible even before it gets a dedicated trigger.
+
+> **Other per-camera/per-disk items with no alarm**, purely for visibility: camera `Link Speed` (phyRate - mirrors the no-alarm treatment of satisfaction/channel-utilization items elsewhere in this template), `Is Recording`, `Recording Mode`, `Poor Network Flag`, `IR/Night Mode`, `Last Seen`, `Last Ring`; NVR `Storage Allocation Mode`, `Camera License Utilization`; per-disk `State Reason`, `Rebuild Progress`, `Rebuild Estimate`, `Size`, `Power-On Hours`. `Disk Array Total/Used/Available` (from the underlying filesystem, distinct from Protect's own recording-space accounting above) are also data-only today - the two views measure slightly different things and can disagree by a few percent.
+
+> **Retention estimates (`estimatedHqRetentionDays`/`estimatedLqRetentionDays`) are deliberately not monitored.** UniFi Protect's own UI shows an "Estimated N Days" figure per quality tier, but confirmed live (including a fresh poll) that both underlying bootstrap fields are `null` regardless - the UI's number is computed client-side from raw rate/capacity stats using a formula that isn't exposed by any endpoint tested. Guessing at that formula risks showing a confidently wrong number, which is worse than showing none - `Disk Array Available`/`Protect Storage Available` above are reliable, always-populated proxies for capacity awareness instead.
+
+> **"Discover Host Protect Other"** covers chimes today, and will pick up sensors/lights/sirens/viewers automatically if you adopt them later - same alarm set as above, minus anything recording-specific (those device types have no recording concept).
 
 ---
 
@@ -718,4 +781,16 @@ No additional configuration is required - HA status is detected automatically fr
 **HTTP 429 errors from the local controller**
 - Device hosts no longer log in themselves (see [Polling Architecture](#polling-architecture)), so this should be rare. The only thing that logs in under normal operation is `Local Session + Cloud Devices Raw` (`unifi.host.session`), on its own `{$UNIFI.SESSION.REFRESH.INTERVAL}` schedule (default 10m). `unifi.local.all` doesn't log in routinely at all - it only does a one-off fresh login itself if its cached token turns out to be rejected
 - A rate-limited or failed poll is simply skipped rather than misread as the device being down, so an occasional `429` is not something you need to act on
+
+**`unifi.protect.bootstrap` reports HTTP 403**
+- The account has Network access but not Protect access - these are two separate permission grants in UniFi OS. Open the console's admin panel, find the account used for `{$UNIFI.USERNAME}`, and check the **Protect** role dropdown specifically (not just the overall Admin Privileges dropdown) is set to **View Only** or higher, then click through to actually save it. It's possible for the dropdown to visually show a value that hasn't been persisted server-side - if the account still 403s after saving, reload the admin page and confirm the setting held
+- This item logs a specific message naming the missing grant (`Zabbix.log` level 4 / Debug) if you want to confirm this is the cause before changing anything
+
+**No Protect hosts (cameras/NVR items) appear for a console that does run Protect**
+- Confirm `{$UNIFI.SESSION.TOKEN}` is populated on the console host - Protect discovery depends on the same cached token as Network device discovery
+- Check `unifi.protect.bootstrap` under **Monitoring > Latest data** on the console host for errors
+- A console with Protect genuinely not installed will show an empty result here with no error - this is expected, not a fault (see [Polling Architecture](#polling-architecture))
+
+**Camera or chime host also appears as a generic device under a console's inventory**
+- Protect devices are excluded from "Discover Host Other Devices" by their `productLine` field (`protect` vs `network`), confirmed against a live cloud API response before this was added. If you see a duplicate, check whether that specific device's `productLine` is actually reported as something other than `protect` - if so, it's worth reporting as an edge case, since every Protect device checked during development reported `protect` consistently regardless of type (camera, doorbell, chime)
 - If a device's cached `{$UNIFI.SESSION.TOKEN}` is ever rejected, that device performs one fresh login itself to recover the same cycle - a burst of these across many devices at once would point at the console-level token propagation being broken (check `Local Session + Cloud Devices Raw` under **Monitoring > Latest data**) rather than the per-device rate limit itself
