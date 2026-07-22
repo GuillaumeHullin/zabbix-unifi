@@ -29,7 +29,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -264,8 +264,11 @@ zabbix_export:
         ~2 hour session token lifetime (a 12x margin) - the login this item performs is O(1) per console regardless of
         device count, so more frequent refreshes are cheap, but the exact conditions that trip UniFi''s local rate limiter
         aren''t fully known (confirmed concurrent-login-based; a rolling per-time-window limit hasn''t been ruled out), so
-        this stays conservative rather than refreshing every minute just because the login itself is cheap. The trade-off:
-        new/renamed devices take up to this long to be reflected, since this item''s cloud fetch also drives discovery.'
+        this stays conservative rather than refreshing every minute just because the login itself is cheap. Network device
+        discovery (UAP/USW/UPS/RPS/Other) no longer depends on this item - it is driven by "Unifi API Raw: Host Devices"
+        (cloud-only, 1m) so it keeps working even with no local network access to the console. Protect camera/other device
+        discovery is local-API-only (Site Manager v1 has no Protect inventory endpoint) and still seeds its session token
+        from this item''s cache, though its own poll cadence is {$UNIFI.CONSOLE.POLL.INTERVAL}.'
     - macro: '{$WAN_UPTIME_WARN}'
       value: '99'
       description: 'WAN uptime % below which AVERAGE alert fires (default: 99%)'
@@ -291,7 +294,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -729,6 +732,24 @@ zabbix_export:
       tags:
       - tag: component
         value: raw
+    - uuid: d3a658a548fb4b3c9d2eb3425137c81d
+      name: 'Unifi API Raw: Host Devices'
+      type: HTTP_AGENT
+      key: unifi.api.host.devices
+      delay: 1m
+      history: 1h
+      value_type: TEXT
+      trends: '0'
+      url: https://api.ui.com/v1/devices?hostId={$HOSTID}
+      timeout: 15s
+      headers:
+      - name: Accept
+        value: application/json
+      - name: x-api-key
+        value: '{$APIKEY}'
+      tags:
+      - tag: component
+        value: raw
     - uuid: 122dd6a2e28a4f22b897feb716fe026d
       name: 'Local Session + Cloud Devices Raw'
       type: HTTP_AGENT
@@ -801,6 +822,9 @@ zabbix_export:
         parameters:
         - |
           try {
+              if ('{$UNIFI.LOCAL.API.ENABLED}' === '0') {
+                  throw 'local API disabled for this console ({$UNIFI.LOCAL.API.ENABLED}=0) - skipping local network calls';
+              }
               var base = 'https://{$UNIFI.LOCAL.IP}';
               var token = null;
 
@@ -1607,7 +1631,14 @@ zabbix_export:
                   }
               }
 
-              var result = JSON.parse(res.body);
+              var result;
+              try {
+                  result = JSON.parse(res.body);
+              } catch (e) {
+                  // Some consoles return HTTP 200 with a non-JSON body from this endpoint when
+                  // Protect isn't installed, rather than a 404 - treat it the same way.
+                  return JSON.stringify({nvr: null, cameras: [], chimes: [], token: usedToken});
+              }
               result.token = usedToken;
               return JSON.stringify(result);
           } catch(e) {
@@ -1617,385 +1648,402 @@ zabbix_export:
       tags:
       - tag: component
         value: raw
-    - uuid: 029daac61e0543838f6341d9e53ef954
-      name: Protect Application Version
-      type: DEPENDENT
-      key: unifi.protect.nvr.version
-      delay: '0'
-      history: 1h
-      trends: '0'
-      value_type: TEXT
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.version
-        error_handler: CUSTOM_VALUE
-        error_handler_params: ''
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-    - uuid: 8d5fbe209c4a47709ddc3e817b18ec4f
-      name: Protect Database Corruption State
-      type: DEPENDENT
-      key: unifi.protect.nvr.corruptionstate
-      delay: '0'
-      history: 1h
-      trends: '0'
-      value_type: TEXT
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.corruptionState
-        error_handler: CUSTOM_VALUE
-        error_handler_params: healthy
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-      triggers:
-      - uuid: 25b90456f198403bbb9d1147a8702d0d
-        expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.corruptionstate,#1,"regexp","healthy")<>1
-        name: '{HOST.NAME} Protect database corruption detected (state: {ITEM.LASTVALUE})'
-        priority: HIGH
-        description: UniFi Protect is reporting its recording database in a non-healthy state. Recording and playback
-          may be unreliable until this is resolved. Check the Protect application's storage/system status in the
-          UniFi OS dashboard; a rebuild or storage replacement may be required.
-    - uuid: fe97cdc13609407f9f4e633d93d7f0d6
-      name: Protect Hard Drive Compatibility State
-      type: DEPENDENT
-      key: unifi.protect.nvr.harddrivestate
-      delay: '0'
-      history: 1h
-      trends: '0'
-      value_type: TEXT
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.hardDriveState
-        error_handler: CUSTOM_VALUE
-        error_handler_params: ''
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-      triggers:
-      - uuid: a8559f2c6e4242e3a6e68ecf825cab07
-        expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.harddrivestate,#1,"regexp","hddNotCompatible")=1
-        name: '{HOST.NAME} Protect storage drive not officially compatible'
-        priority: INFO
-        manual_close: 'YES'
-        description: UniFi Protect reports the installed hard drive as not on its compatibility list. This is a
-          compatibility/support notice, not an indicator of an active fault - a drive can run this way indefinitely
-          with no real issues, so this is informational only. Cross-check the per-disk Health/State/Bad Sectors
-          items on this same host for actual drive health signals. Only this one known-bad value is denylisted here
-          since no confirmed "healthy" string has been observed live; the change() safety-net trigger below will
-          surface any other value seen.
-      - uuid: 4fbe07ffe76e4b7893231777d14d0b8f
-        expression: change(/Ubiquiti UniFi API Host/unifi.protect.nvr.harddrivestate)=1
-        name: '{HOST.NAME} Protect hard drive state changed to {ITEM.LASTVALUE}'
-        priority: INFO
-        manual_close: 'YES'
-        description: The reported hard drive compatibility/health state changed. Informational safety net so any
-          transition is visible even for values not yet explicitly handled by a dedicated trigger.
-    - uuid: 08a4bed83b384a7cbf6ee88ff8eef6fa
-      name: Protect Camera License Capacity State
-      type: DEPENDENT
-      key: unifi.protect.nvr.cameracapacitystate
-      delay: '0'
-      history: 1h
-      trends: '0'
-      value_type: TEXT
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.cameraCapacity.state
-        error_handler: CUSTOM_VALUE
-        error_handler_params: ok
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-      triggers:
-      - uuid: 134fd4ce7d0444e897ac21c074477ba7
-        expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.cameracapacitystate,#1,"regexp","ok")<>1
-        name: '{HOST.NAME} Protect camera license capacity not ok (state: {ITEM.LASTVALUE})'
-        priority: WARNING
-        description: UniFi Protect reports its camera license/capacity state as something other than "ok" - this
-          NVR may be over its supported camera count for the resolutions in use. Check the Protect dashboard's
-          camera capacity/licensing panel.
-    - uuid: eeaf7abbdd3f43a5ad6feecc180a76ef
-      name: Protect Camera License Utilization
-      type: DEPENDENT
-      key: unifi.protect.nvr.camerautilization
-      delay: '0'
-      history: 1h
-      trends: 365d
-      value_type: FLOAT
-      units: '%'
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.cameraUtilization
-        error_handler: CUSTOM_VALUE
-        error_handler_params: '0'
-      - type: JAVASCRIPT
-        parameters:
-        - |
-          // A JSON null resolves the JSONPath step above successfully (as the
-          // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
-          return (value === 'null' || value === '') ? '0' : value;
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-    - uuid: 4d076152ace8476d890fd418140e9799
-      name: Protect Storage Utilization
-      type: DEPENDENT
-      key: unifi.protect.nvr.storageutilization
-      delay: '0'
-      history: 1h
-      trends: 365d
-      value_type: FLOAT
-      units: '%'
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.storageStats.utilization
-        error_handler: CUSTOM_VALUE
-        error_handler_params: '0'
-      - type: JAVASCRIPT
-        parameters:
-        - |
-          // A JSON null resolves the JSONPath step above successfully (as the
-          // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
-          return (value === 'null' || value === '') ? '0' : value;
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-      triggers:
-      - uuid: f3f3e0e9b05c4756b22ff50878288881
-        expression: last(/Ubiquiti UniFi API Host/unifi.protect.nvr.storageutilization)>{$UNIFI.PROTECT.STORAGE.HIGH}
-        name: '{HOST.NAME} Protect storage critical: {ITEM.LASTVALUE}% (threshold: {$UNIFI.PROTECT.STORAGE.HIGH}%)'
-        priority: HIGH
-        description: Protect's continuous recording is designed to run near-full and automatically overwrite the
-          oldest footage once full - normal steady-state utilization is commonly in the mid-to-high 90s, not a
-          problem on its own. This only fires above {$UNIFI.PROTECT.STORAGE.HIGH}%, high enough that it's no longer
-          "normal near-full," which more likely means the automatic recycling/deletion isn't keeping pace. Check the
-          storage panel in the UniFi OS dashboard.
-    - uuid: 928ca1baec954f4db4913553678df0f9
-      name: Protect Storage Available
-      type: DEPENDENT
-      key: unifi.protect.nvr.storageavailable
-      delay: '0'
-      history: 1h
-      trends: 365d
-      units: B
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.storageStats.recordingSpace.available
-        error_handler: CUSTOM_VALUE
-        error_handler_params: '0'
-      - type: JAVASCRIPT
-        parameters:
-        - |
-          // A JSON null resolves the JSONPath step above successfully (as the
-          // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
-          return (value === 'null' || value === '') ? '0' : value;
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-    - uuid: 83890b3a1cba401c83f68feb6cf7c1c5
-      name: Protect Storage Allocation Mode
-      type: DEPENDENT
-      key: unifi.protect.nvr.storageallocationmode
-      delay: '0'
-      history: 1h
-      trends: '0'
-      value_type: TEXT
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.storageAllocationMode
-        error_handler: CUSTOM_VALUE
-        error_handler_params: ''
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-    - uuid: dda1075c593842f1b4ab7f94d7a19c94
-      name: Disk Array Total Capacity
-      type: DEPENDENT
-      key: unifi.protect.nvr.array.total
-      delay: '0'
-      history: 1h
-      trends: 365d
-      units: B
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.systemInfo.storage.size
-        error_handler: CUSTOM_VALUE
-        error_handler_params: '0'
-      - type: JAVASCRIPT
-        parameters:
-        - |
-          // A JSON null resolves the JSONPath step above successfully (as the
-          // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
-          return (value === 'null' || value === '') ? '0' : value;
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-    - uuid: d7f2c7c3bc3441fe84340271a5217018
-      name: Disk Array Used
-      type: DEPENDENT
-      key: unifi.protect.nvr.array.used
-      delay: '0'
-      history: 1h
-      trends: 365d
-      units: B
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.systemInfo.storage.used
-        error_handler: CUSTOM_VALUE
-        error_handler_params: '0'
-      - type: JAVASCRIPT
-        parameters:
-        - |
-          // A JSON null resolves the JSONPath step above successfully (as the
-          // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
-          return (value === 'null' || value === '') ? '0' : value;
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-    - uuid: 76d2536e4d2942aba1064bf00c97b208
-      name: Disk Array Available
-      type: DEPENDENT
-      key: unifi.protect.nvr.array.available
-      delay: '0'
-      history: 1h
-      trends: 365d
-      units: B
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.systemInfo.storage.available
-        error_handler: CUSTOM_VALUE
-        error_handler_params: '0'
-      - type: JAVASCRIPT
-        parameters:
-        - |
-          // A JSON null resolves the JSONPath step above successfully (as the
-          // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
-          return (value === 'null' || value === '') ? '0' : value;
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-    - uuid: 557b91656b734c4993a5495b43417a54
-      name: Disk Array Capability
-      type: DEPENDENT
-      key: unifi.protect.nvr.array.capability
-      delay: '0'
-      history: 1h
-      trends: '0'
-      value_type: TEXT
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.systemInfo.storage.capability
-        error_handler: CUSTOM_VALUE
-        error_handler_params: ''
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-      triggers:
-      - uuid: 5655e0204bb94e48ba52d7371ca77784
-        expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.array.capability,#1,"regexp","ok")<>1
-        name: '{HOST.NAME} Protect disk array capability not ok (state: {ITEM.LASTVALUE})'
-        priority: HIGH
-        description: The underlying disk/RAID array's own capability check (independent of Protect's own storage
-          accounting above) is reporting something other than "ok". Check the storage panel in the UniFi OS
-          dashboard for the specific condition.
-    - uuid: 8d5324ed4d6b4a65af5ed076ca16c848
-      name: Protect Recording Globally Disabled
-      type: DEPENDENT
-      key: unifi.protect.nvr.recordingdisabled
-      delay: '0'
-      history: 1h
-      trends: '0'
-      value_type: TEXT
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.isRecordingDisabled
-        error_handler: CUSTOM_VALUE
-        error_handler_params: 'false'
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-      triggers:
-      - uuid: 94c48817845545a8a3699796f3f4f51d
-        expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.recordingdisabled,#1,"regexp","true")=1
-        name: '{HOST.NAME} Protect recording is globally disabled'
-        priority: HIGH
-        description: UniFi Protect has recording disabled at the NVR level - no camera on this console is recording
-          regardless of its individual settings. This is almost always unintentional; check the Protect dashboard's
-          global recording toggle.
-    - uuid: a623b5749ff742f6949a0b7399fe1c20
-      name: Protect Offline Camera Count
-      type: DEPENDENT
-      key: unifi.protect.nvr.offlinecameracount
-      delay: '0'
-      history: 1h
-      trends: 365d
-      preprocessing:
-      - type: JSONPATH
-        parameters:
-        - $.nvr.storageConsoleCameraCounts[0].offlineCameraCount
-        error_handler: CUSTOM_VALUE
-        error_handler_params: '0'
-      - type: JAVASCRIPT
-        parameters:
-        - |
-          // A JSON null resolves the JSONPath step above successfully (as the
-          // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
-          return (value === 'null' || value === '') ? '0' : value;
-      master_item:
-        key: unifi.protect.bootstrap
-      tags:
-      - tag: component
-        value: protect-nvr
-      triggers:
-      - uuid: 47184144597f455d9fc96c6ff8da0d88
-        expression: last(/Ubiquiti UniFi API Host/unifi.protect.nvr.offlinecameracount)>0
-        name: '{HOST.NAME} Protect reports {ITEM.LASTVALUE} camera(s) offline (NVR-side count)'
-        priority: WARNING
-        description: UniFi Protect's own aggregate count of offline cameras is above zero. This is a belt-and-suspenders
-          check alongside the per-camera state triggers - it will still fire even if a camera host hasn't been
-          discovered yet or its own item is failing for an unrelated reason.
     discovery_rules:
+    - uuid: 295f0839888f4c6ab38c8c2cc623a38b
+      name: Discover Protect NVR
+      type: DEPENDENT
+      key: unifi.protect.nvr.discovery
+      delay: '0'
+      item_prototypes:
+      - uuid: 029daac61e0543838f6341d9e53ef954
+        name: Protect Application Version
+        type: DEPENDENT
+        key: unifi.protect.nvr.version[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.version
+          error_handler: CUSTOM_VALUE
+          error_handler_params: ''
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+      - uuid: 8d5fbe209c4a47709ddc3e817b18ec4f
+        name: Protect Database Corruption State
+        type: DEPENDENT
+        key: unifi.protect.nvr.corruptionstate[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.corruptionState
+          error_handler: CUSTOM_VALUE
+          error_handler_params: healthy
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+        trigger_prototypes:
+        - uuid: 25b90456f198403bbb9d1147a8702d0d
+          expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.corruptionstate[{#NVR}],#1,"regexp","healthy")<>1
+          name: '{HOST.NAME} Protect database corruption detected (state: {ITEM.LASTVALUE})'
+          priority: HIGH
+          description: UniFi Protect is reporting its recording database in a non-healthy state. Recording and playback
+            may be unreliable until this is resolved. Check the Protect application's storage/system status in the
+            UniFi OS dashboard; a rebuild or storage replacement may be required.
+      - uuid: fe97cdc13609407f9f4e633d93d7f0d6
+        name: Protect Hard Drive Compatibility State
+        type: DEPENDENT
+        key: unifi.protect.nvr.harddrivestate[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.hardDriveState
+          error_handler: CUSTOM_VALUE
+          error_handler_params: ''
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+        trigger_prototypes:
+        - uuid: a8559f2c6e4242e3a6e68ecf825cab07
+          expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.harddrivestate[{#NVR}],#1,"regexp","hddNotCompatible")=1
+          name: '{HOST.NAME} Protect storage drive not officially compatible'
+          priority: INFO
+          manual_close: 'YES'
+          description: UniFi Protect reports the installed hard drive as not on its compatibility list. This is a
+            compatibility/support notice, not an indicator of an active fault - a drive can run this way indefinitely
+            with no real issues, so this is informational only. Cross-check the per-disk Health/State/Bad Sectors
+            items on this same host for actual drive health signals. Only this one known-bad value is denylisted here
+            since no confirmed "healthy" string has been observed live; the change() safety-net trigger below will
+            surface any other value seen.
+        - uuid: 4fbe07ffe76e4b7893231777d14d0b8f
+          expression: change(/Ubiquiti UniFi API Host/unifi.protect.nvr.harddrivestate[{#NVR}])=1
+          name: '{HOST.NAME} Protect hard drive state changed to {ITEM.LASTVALUE}'
+          priority: INFO
+          manual_close: 'YES'
+          description: The reported hard drive compatibility/health state changed. Informational safety net so any
+            transition is visible even for values not yet explicitly handled by a dedicated trigger.
+      - uuid: 08a4bed83b384a7cbf6ee88ff8eef6fa
+        name: Protect Camera License Capacity State
+        type: DEPENDENT
+        key: unifi.protect.nvr.cameracapacitystate[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.cameraCapacity.state
+          error_handler: CUSTOM_VALUE
+          error_handler_params: ok
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+        trigger_prototypes:
+        - uuid: 134fd4ce7d0444e897ac21c074477ba7
+          expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.cameracapacitystate[{#NVR}],#1,"regexp","ok")<>1
+          name: '{HOST.NAME} Protect camera license capacity not ok (state: {ITEM.LASTVALUE})'
+          priority: WARNING
+          description: UniFi Protect reports its camera license/capacity state as something other than "ok" - this
+            NVR may be over its supported camera count for the resolutions in use. Check the Protect dashboard's
+            camera capacity/licensing panel.
+      - uuid: eeaf7abbdd3f43a5ad6feecc180a76ef
+        name: Protect Camera License Utilization
+        type: DEPENDENT
+        key: unifi.protect.nvr.camerautilization[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: 365d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.cameraUtilization
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        - type: JAVASCRIPT
+          parameters:
+          - |
+            // A JSON null resolves the JSONPath step above successfully (as the
+            // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
+            return (value === 'null' || value === '') ? '0' : value;
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+      - uuid: 4d076152ace8476d890fd418140e9799
+        name: Protect Storage Utilization
+        type: DEPENDENT
+        key: unifi.protect.nvr.storageutilization[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: 365d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.storageStats.utilization
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        - type: JAVASCRIPT
+          parameters:
+          - |
+            // A JSON null resolves the JSONPath step above successfully (as the
+            // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
+            return (value === 'null' || value === '') ? '0' : value;
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+        trigger_prototypes:
+        - uuid: f3f3e0e9b05c4756b22ff50878288881
+          expression: last(/Ubiquiti UniFi API Host/unifi.protect.nvr.storageutilization[{#NVR}])>{$UNIFI.PROTECT.STORAGE.HIGH}
+          name: '{HOST.NAME} Protect storage critical: {ITEM.LASTVALUE}% (threshold: {$UNIFI.PROTECT.STORAGE.HIGH}%)'
+          priority: HIGH
+          description: Protect's continuous recording is designed to run near-full and automatically overwrite the
+            oldest footage once full - normal steady-state utilization is commonly in the mid-to-high 90s, not a
+            problem on its own. This only fires above {$UNIFI.PROTECT.STORAGE.HIGH}%, high enough that it's no longer
+            "normal near-full," which more likely means the automatic recycling/deletion isn't keeping pace. Check the
+            storage panel in the UniFi OS dashboard.
+      - uuid: 928ca1baec954f4db4913553678df0f9
+        name: Protect Storage Available
+        type: DEPENDENT
+        key: unifi.protect.nvr.storageavailable[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: 365d
+        units: B
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.storageStats.recordingSpace.available
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        - type: JAVASCRIPT
+          parameters:
+          - |
+            // A JSON null resolves the JSONPath step above successfully (as the
+            // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
+            return (value === 'null' || value === '') ? '0' : value;
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+      - uuid: 83890b3a1cba401c83f68feb6cf7c1c5
+        name: Protect Storage Allocation Mode
+        type: DEPENDENT
+        key: unifi.protect.nvr.storageallocationmode[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.storageAllocationMode
+          error_handler: CUSTOM_VALUE
+          error_handler_params: ''
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+      - uuid: dda1075c593842f1b4ab7f94d7a19c94
+        name: Disk Array Total Capacity
+        type: DEPENDENT
+        key: unifi.protect.nvr.array.total[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: 365d
+        units: B
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.systemInfo.storage.size
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        - type: JAVASCRIPT
+          parameters:
+          - |
+            // A JSON null resolves the JSONPath step above successfully (as the
+            // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
+            return (value === 'null' || value === '') ? '0' : value;
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+      - uuid: d7f2c7c3bc3441fe84340271a5217018
+        name: Disk Array Used
+        type: DEPENDENT
+        key: unifi.protect.nvr.array.used[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: 365d
+        units: B
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.systemInfo.storage.used
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        - type: JAVASCRIPT
+          parameters:
+          - |
+            // A JSON null resolves the JSONPath step above successfully (as the
+            // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
+            return (value === 'null' || value === '') ? '0' : value;
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+      - uuid: 76d2536e4d2942aba1064bf00c97b208
+        name: Disk Array Available
+        type: DEPENDENT
+        key: unifi.protect.nvr.array.available[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: 365d
+        units: B
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.systemInfo.storage.available
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        - type: JAVASCRIPT
+          parameters:
+          - |
+            // A JSON null resolves the JSONPath step above successfully (as the
+            // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
+            return (value === 'null' || value === '') ? '0' : value;
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+      - uuid: 557b91656b734c4993a5495b43417a54
+        name: Disk Array Capability
+        type: DEPENDENT
+        key: unifi.protect.nvr.array.capability[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.systemInfo.storage.capability
+          error_handler: CUSTOM_VALUE
+          error_handler_params: ''
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+        trigger_prototypes:
+        - uuid: 5655e0204bb94e48ba52d7371ca77784
+          expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.array.capability[{#NVR}],#1,"regexp","ok")<>1
+          name: '{HOST.NAME} Protect disk array capability not ok (state: {ITEM.LASTVALUE})'
+          priority: HIGH
+          description: The underlying disk/RAID array's own capability check (independent of Protect's own storage
+            accounting above) is reporting something other than "ok". Check the storage panel in the UniFi OS
+            dashboard for the specific condition.
+      - uuid: 8d5324ed4d6b4a65af5ed076ca16c848
+        name: Protect Recording Globally Disabled
+        type: DEPENDENT
+        key: unifi.protect.nvr.recordingdisabled[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.isRecordingDisabled
+          error_handler: CUSTOM_VALUE
+          error_handler_params: 'false'
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+        trigger_prototypes:
+        - uuid: 94c48817845545a8a3699796f3f4f51d
+          expression: find(/Ubiquiti UniFi API Host/unifi.protect.nvr.recordingdisabled[{#NVR}],#1,"regexp","true")=1
+          name: '{HOST.NAME} Protect recording is globally disabled'
+          priority: HIGH
+          description: UniFi Protect has recording disabled at the NVR level - no camera on this console is recording
+            regardless of its individual settings. This is almost always unintentional; check the Protect dashboard's
+            global recording toggle.
+      - uuid: a623b5749ff742f6949a0b7399fe1c20
+        name: Protect Offline Camera Count
+        type: DEPENDENT
+        key: unifi.protect.nvr.offlinecameracount[{#NVR}]
+        delay: '0'
+        history: 1h
+        trends: 365d
+        preprocessing:
+        - type: JSONPATH
+          parameters:
+          - $.nvr.storageConsoleCameraCounts[0].offlineCameraCount
+          error_handler: CUSTOM_VALUE
+          error_handler_params: '0'
+        - type: JAVASCRIPT
+          parameters:
+          - |
+            // A JSON null resolves the JSONPath step above successfully (as the
+            // literal string "null"), so error_handler/CUSTOM_VALUE never triggers.
+            return (value === 'null' || value === '') ? '0' : value;
+        master_item:
+          key: unifi.protect.bootstrap
+        tags:
+        - tag: component
+          value: protect-nvr
+        trigger_prototypes:
+        - uuid: 47184144597f455d9fc96c6ff8da0d88
+          expression: last(/Ubiquiti UniFi API Host/unifi.protect.nvr.offlinecameracount[{#NVR}])>0
+          name: '{HOST.NAME} Protect reports {ITEM.LASTVALUE} camera(s) offline (NVR-side count)'
+          priority: WARNING
+          description: UniFi Protect's own aggregate count of offline cameras is above zero. This is a belt-and-suspenders
+            check alongside the per-camera state triggers - it will still fire even if a camera host hasn't been
+            discovered yet or its own item is failing for an unrelated reason.
+      master_item:
+        key: unifi.protect.bootstrap
+      lld_macro_paths:
+      - lld_macro: '{#NVR}'
+        path: $.nvr
+      preprocessing:
+      - type: JAVASCRIPT
+        parameters:
+        - |
+          var d = JSON.parse(value);
+          return JSON.stringify(d.nvr ? [{nvr: 'yes'}] : []);
     - uuid: 47a289bbe5ef432ab26caceb098e478e
       name: Discover WAN Interfaces
       type: DEPENDENT
@@ -2145,7 +2193,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.up[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -2288,7 +2336,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.link_down_count[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -2307,7 +2355,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.mac_table_count[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -2326,7 +2374,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.rx_dropped[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -2359,7 +2407,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.tx_dropped[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -2392,7 +2440,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.stp_state[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -2472,7 +2520,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.speed[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: bps
         preprocessing:
         - type: JSONPATH
@@ -2495,7 +2543,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.tx_rate[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: Bps
         preprocessing:
         - type: JSONPATH
@@ -2515,7 +2563,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.rx_rate[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: Bps
         preprocessing:
         - type: JSONPATH
@@ -2535,7 +2583,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.tx_errors[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -2567,7 +2615,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.rx_errors[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -2599,7 +2647,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.satisfaction[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         preprocessing:
         - type: JSONPATH
@@ -2619,7 +2667,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.port.anomalies[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         preprocessing:
         - type: JSONPATH
@@ -2664,7 +2712,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.sfp.txfault[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -2697,7 +2745,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.sfp.rxlos[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -2867,7 +2915,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.sfp.temperature[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: °C
         preprocessing:
@@ -2910,7 +2958,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.sfp.rxpower[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: dBm
         preprocessing:
@@ -2955,7 +3003,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.sfp.txpower[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: dBm
         preprocessing:
@@ -3000,7 +3048,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.sfp.voltage[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: V
         preprocessing:
@@ -3021,7 +3069,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.gw.sfp.current[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: mA
         preprocessing:
@@ -3802,7 +3850,7 @@ zabbix_export:
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.host.session
+        key: unifi.api.host.devices
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -3927,7 +3975,7 @@ zabbix_export:
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.host.session
+        key: unifi.api.host.devices
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -4052,7 +4100,7 @@ zabbix_export:
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.host.session
+        key: unifi.api.host.devices
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -4177,7 +4225,7 @@ zabbix_export:
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.host.session
+        key: unifi.api.host.devices
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -4309,7 +4357,7 @@ zabbix_export:
         interfaces:
         - ip: '{#DEVICEIP}'
       master_item:
-        key: unifi.host.session
+        key: unifi.api.host.devices
       lld_macro_paths:
       - lld_macro: '{#DEVICEID}'
         path: $.id
@@ -5104,6 +5152,19 @@ zabbix_export:
       description: WAN latency warning threshold (ms). UK home typical RTT is 10–30ms.
     - macro: '{$UNIFI.LOCAL.IP}'
       description: Local management IP of this console - populated from host discovery
+    - macro: '{$UNIFI.LOCAL.API.ENABLED}'
+      value: '1'
+      description: 'Set to 0 on a console with no local network path from this Zabbix server (e.g. a cloud gateway with
+        no local proxy) to skip local polling. This only stops network calls for "Local Raw (Combined)" and "Protect
+        Bootstrap Raw" - both CALCULATED items where all HTTP calls happen in our own preprocessing, so we can check
+        this macro before making any request. It cannot stop "Local Session + Cloud Devices Raw" (the session-token
+        login POST) or the per-device local raw items (UAP/USW/UPS/RPS) from attempting their request: those are plain
+        HTTP agent items whose request Zabbix fires before any preprocessing runs, so no template-side macro can gate
+        them - they will keep trying and failing at whatever cadence {$UNIFI.LOCAL.POLL.INTERVAL} /
+        {$UNIFI.SESSION.REFRESH.INTERVAL} / {$UNIFI.CONSOLE.POLL.INTERVAL} dictate. For a cloud-only console, raise
+        those intervals (e.g. to 1h+) to make the unavoidable failures rare instead of constant. Device-level cloud-only
+        offline detection (Ubiquiti UniFi Device template''s Status item) is unaffected either way - it only calls
+        api.ui.com.'
     - macro: '{$UNIFI.USERNAME}'
       description: Local controller username - inherited from the root host's default at discovery time, or set here
         to override for this specific console
@@ -5221,7 +5282,7 @@ zabbix_export:
       Applied to SD-WAN config hosts discovered by Ubiquiti UniFi API. Monitors tunnel health, configuration
       status, and WAN internet issues for each SD-WAN config via /v1/sd-wan-configs/{id}/status.
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -5531,7 +5592,7 @@ zabbix_export:
       Monitors device status, firmware, version, uptime, and IP via cloud API.
       Macros {$HOSTID} and {$DEVICEID} are set automatically by the discovering gateway's host prototype.
 
-      Version: 1.3.0
+      Version: 1.4.0
 
       Template available at https://github.com/kairandles/zabbix-unifi
     groups:
@@ -5840,7 +5901,7 @@ zabbix_export:
       Local controller polling for UniFi Access Points. Applied alongside Ubiquiti UniFi Device by host
       prototype discovery.
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -6181,7 +6242,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.uap.radio.channel[{#RADIONAME}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -6224,7 +6285,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.uap.radio.bw[{#RADIONAME}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: MHz
         preprocessing:
         - type: JSONPATH
@@ -6244,7 +6305,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.uap.radio.state[{#RADIONAME}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -6278,7 +6339,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.uap.radio.tx_power[{#RADIONAME}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: dBm
         preprocessing:
         - type: JSONPATH
@@ -6298,7 +6359,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.uap.radio.cu_total[{#RADIONAME}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: '%'
         preprocessing:
@@ -6319,7 +6380,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.uap.radio.tx_retries_pct[{#RADIONAME}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: '%'
         preprocessing:
@@ -6340,7 +6401,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.uap.radio.num_sta[{#RADIONAME}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: clients
         preprocessing:
         - type: JSONPATH
@@ -6418,7 +6479,7 @@ zabbix_export:
       Local controller polling for UniFi Switches. Applied alongside Ubiquiti UniFi Device by host prototype
       discovery.
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -6687,7 +6748,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.up[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -6833,7 +6894,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.link_down_count[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -6852,7 +6913,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.mac_table_count[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -6871,7 +6932,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.rx_dropped[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -6906,7 +6967,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.tx_dropped[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -6941,7 +7002,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.stp_state[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -7022,7 +7083,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.speed[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: bps
         preprocessing:
         - type: JSONPATH
@@ -7045,7 +7106,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.tx_rate[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: Bps
         preprocessing:
         - type: JSONPATH
@@ -7065,7 +7126,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.rx_rate[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         units: Bps
         preprocessing:
         - type: JSONPATH
@@ -7085,7 +7146,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.tx_errors[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -7118,7 +7179,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.rx_errors[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         preprocessing:
         - type: JSONPATH
           parameters:
@@ -7151,7 +7212,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.poe_power[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: W
         preprocessing:
@@ -7172,7 +7233,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.satisfaction[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         preprocessing:
         - type: JSONPATH
@@ -7192,7 +7253,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.port.anomalies[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         preprocessing:
         - type: JSONPATH
@@ -7237,7 +7298,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.sfp.txfault[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -7271,7 +7332,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.sfp.rxfault[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -7467,7 +7528,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.sfp.temperature[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: °C
         preprocessing:
@@ -7514,7 +7575,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.sfp.rxpower[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: dBm
         preprocessing:
@@ -7564,7 +7625,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.sfp.txpower[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: dBm
         preprocessing:
@@ -7614,7 +7675,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.sfp.voltage[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: V
         preprocessing:
@@ -7635,7 +7696,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.usw.sfp.current[{#PORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: mA
         preprocessing:
@@ -7748,7 +7809,7 @@ zabbix_export:
       Local controller polling for USW-Deployed-24 (USWDA) with battery backup. Applied alongside Ubiquiti
       UniFi Device by host prototype discovery.
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -8146,7 +8207,7 @@ zabbix_export:
       Local controller polling for USP-RPS (Redundant Power Supply). Monitors PSU failover state - DISASTER
       fires when a connected device loses its primary PSU and the RPS takes over.
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -8500,7 +8561,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.rps.port.state[{#RPSPORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -8532,7 +8593,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.rps.port.delivering[{#RPSPORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -8554,7 +8615,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.rps.port.up[{#RPSPORTID}]
         delay: '0'
-        history: 90d
+        history: 7d
         value_type: TEXT
         trends: '0'
         preprocessing:
@@ -8587,7 +8648,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.rps.port.power.12v[{#RPSPORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: W
         preprocessing:
@@ -8609,7 +8670,7 @@ zabbix_export:
         type: DEPENDENT
         key: unifi.rps.port.power.54v[{#RPSPORTID}]
         delay: '0'
-        history: 90d
+        history: 14d
         value_type: FLOAT
         units: W
         preprocessing:
@@ -8702,7 +8763,7 @@ zabbix_export:
       Protect Cameras" on Ubiquiti UniFi API Host. Reuses the same session token already cached by that console's
       unifi.host.session item - no separate login or credentials of its own.
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
@@ -9160,7 +9221,7 @@ zabbix_export:
       types have no recording concept. Reuses the same session token already cached by that console's
       unifi.host.session item - no separate login or credentials of its own.
 
-      Version: 1.3.0
+      Version: 1.4.0
     groups:
     - name: Templates
     items:
