@@ -29,7 +29,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -119,6 +119,9 @@ zabbix_export:
         - macro: '{$UNIFI.SESSION.REFRESH.INTERVAL}'
           value: '{#SESSIONREFRESHINTERVAL}'
           description: Console session-token refresh interval, inherited from the root host's default at discovery time
+        - macro: '{$UNIFI.LOCAL.API.ENABLED}'
+          value: '{#LOCALAPIENABLED}'
+          description: Local API enable flag (1/0), inherited from the root host's default at discovery time
         custom_interfaces: 'YES'
         interfaces:
         - ip: '{#LOCALIP}'
@@ -147,6 +150,8 @@ zabbix_export:
         path: $.consolePollInterval
       - lld_macro: '{#SESSIONREFRESHINTERVAL}'
         path: $.sessionRefreshInterval
+      - lld_macro: '{#LOCALAPIENABLED}'
+        path: $.localApiEnabled
       preprocessing:
       - type: JSONPATH
         parameters:
@@ -167,8 +172,16 @@ zabbix_export:
                   if (t.length > 0) { excluded.push(t); }
               }
           }
+          function isPrivate(ip) {
+              if (ip.indexOf('10.') === 0 || ip.indexOf('192.168.') === 0) { return true; }
+              if (ip.indexOf('172.') === 0) {
+                  var oct = parseInt(ip.split('.')[1], 10);
+                  return oct >= 16 && oct <= 31;
+              }
+              return false;
+          }
           var result = [];
-          for (var i = 0; i < Object.keys(obj).length; i++) {
+          for (var i = 0, n = Object.keys(obj).length; i < n; i++) {
               var rs = obj[i].reportedState || {};
               var hostname = (rs.hostname || '');
               var hostId = (obj[i].id || '');
@@ -178,16 +191,25 @@ zabbix_export:
                   excluded.indexOf(hostIdPrefix) !== -1) {
                   continue;
               }
-              var addrs = rs.ipAddrs || [];
+              // Local IP selection. ipAddrs is only populated by the Network app, so
+              // consoles without it (UNAS, CloudKey running Protect only) report an
+              // empty list and expose their address in reportedState.ip instead -
+              // treated here as one more candidate. On double-NAT gateways a WAN
+              // address can itself be RFC1918, so addresses matching a WAN interface
+              // IP are only used as a last resort.
+              var candidates = (rs.ipAddrs || []).slice();
+              if (rs.ip && candidates.indexOf(rs.ip) === -1) { candidates.push(rs.ip); }
+              var wans = rs.wans || [];
+              var wanIps = [];
+              for (var w = 0; w < wans.length; w++) {
+                  if (wans[w].ipv4) { wanIps.push(wans[w].ipv4); }
+              }
               var localIp = '';
-              var prefixes = ['10.', '192.168.', '172.'];
-              for (var p = 0; p < prefixes.length && !localIp; p++) {
-                  for (var j = 0; j < addrs.length; j++) {
-                      if (addrs[j].indexOf(prefixes[p]) === 0) {
-                          localIp = addrs[j];
-                          break;
-                      }
-                  }
+              for (var a = 0; a < candidates.length && !localIp; a++) {
+                  if (isPrivate(candidates[a]) && wanIps.indexOf(candidates[a]) === -1) { localIp = candidates[a]; }
+              }
+              for (var b = 0; b < candidates.length && !localIp; b++) {
+                  if (isPrivate(candidates[b])) { localIp = candidates[b]; }
               }
               obj[i].localIp = localIp;
               // Derive site name from hostname: "Randles-Family-SC-186" -> "Randles-Family"
@@ -200,6 +222,7 @@ zabbix_export:
               obj[i].pollInterval = '{$UNIFI.LOCAL.POLL.INTERVAL}';
               obj[i].consolePollInterval = '{$UNIFI.CONSOLE.POLL.INTERVAL}';
               obj[i].sessionRefreshInterval = '{$UNIFI.SESSION.REFRESH.INTERVAL}';
+              obj[i].localApiEnabled = '{$UNIFI.LOCAL.API.ENABLED}';
               delete obj[i].reportedState.controllers;
               delete obj[i].features;
               delete obj[i].userData;
@@ -269,6 +292,11 @@ zabbix_export:
         (cloud-only, 1m) so it keeps working even with no local network access to the console. Protect camera/other device
         discovery is local-API-only (Site Manager v1 has no Protect inventory endpoint) and still seeds its session token
         from this item''s cache, though its own poll cadence is {$UNIFI.CONSOLE.POLL.INTERVAL}.'
+    - macro: '{$UNIFI.LOCAL.API.ENABLED}'
+      value: '1'
+      description: Default local-API enable flag, propagated to every discovered console unless overridden on that console's
+        own host. Set to 0 to skip local polling by default for all consoles (see the macro of the same name on Ubiquiti
+        UniFi API Host for exactly which items it can and cannot gate); leave at 1 and override per console for mixed fleets.
     - macro: '{$WAN_UPTIME_WARN}'
       value: '99'
       description: 'WAN uptime % below which AVERAGE alert fires (default: 99%)'
@@ -294,7 +322,7 @@ zabbix_export:
 
       Template available at https://github.com/kairandles/zabbix-unifi
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -5154,7 +5182,8 @@ zabbix_export:
       description: Local management IP of this console - populated from host discovery
     - macro: '{$UNIFI.LOCAL.API.ENABLED}'
       value: '1'
-      description: 'Set to 0 on a console with no local network path from this Zabbix server (e.g. a cloud gateway with
+      description: 'Inherited from the root host''s default at discovery time, or set per console on that console''s host.
+        Set to 0 on a console with no local network path from this Zabbix server (e.g. a cloud gateway with
         no local proxy) to skip local polling. This only stops network calls for "Local Raw (Combined)" and "Protect
         Bootstrap Raw" - both CALCULATED items where all HTTP calls happen in our own preprocessing, so we can check
         this macro before making any request. It cannot stop "Local Session + Cloud Devices Raw" (the session-token
@@ -5282,7 +5311,7 @@ zabbix_export:
       Applied to SD-WAN config hosts discovered by Ubiquiti UniFi API. Monitors tunnel health, configuration
       status, and WAN internet issues for each SD-WAN config via /v1/sd-wan-configs/{id}/status.
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -5592,7 +5621,7 @@ zabbix_export:
       Monitors device status, firmware, version, uptime, and IP via cloud API.
       Macros {$HOSTID} and {$DEVICEID} are set automatically by the discovering gateway's host prototype.
 
-      Version: 1.4.0
+      Version: 1.5.0
 
       Template available at https://github.com/kairandles/zabbix-unifi
     groups:
@@ -5901,7 +5930,7 @@ zabbix_export:
       Local controller polling for UniFi Access Points. Applied alongside Ubiquiti UniFi Device by host
       prototype discovery.
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -6479,7 +6508,7 @@ zabbix_export:
       Local controller polling for UniFi Switches. Applied alongside Ubiquiti UniFi Device by host prototype
       discovery.
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -7809,7 +7838,7 @@ zabbix_export:
       Local controller polling for USW-Deployed-24 (USWDA) with battery backup. Applied alongside Ubiquiti
       UniFi Device by host prototype discovery.
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -8207,7 +8236,7 @@ zabbix_export:
       Local controller polling for USP-RPS (Redundant Power Supply). Monitors PSU failover state - DISASTER
       fires when a connected device loses its primary PSU and the RPS takes over.
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -8763,7 +8792,7 @@ zabbix_export:
       Protect Cameras" on Ubiquiti UniFi API Host. Reuses the same session token already cached by that console's
       unifi.host.session item - no separate login or credentials of its own.
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:
@@ -9221,7 +9250,7 @@ zabbix_export:
       types have no recording concept. Reuses the same session token already cached by that console's
       unifi.host.session item - no separate login or credentials of its own.
 
-      Version: 1.4.0
+      Version: 1.5.0
     groups:
     - name: Templates
     items:

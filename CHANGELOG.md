@@ -2,6 +2,18 @@
 
 All notable changes to this template set are documented here. Versioning starts at 1.1.0 (2026-07-08); everything before that was tracked by date only, so those older entries are kept as-is rather than renumbered retroactively.
 
+## [1.5.0] - 2026-07-23
+
+Completes [#3](../../issues/3): consoles not running the Network application were discovered without a host interface IP. Confirmed working live by the reporter on UNAS, CloudKey (Protect-only), and double-NAT Cloud Gateway consoles.
+
+### Fixed
+- **`Discover Unifi Hosts` now assigns `{#LOCALIP}` (and therefore a host interface IP) to consoles that don't run the Network application** (UNAS, CloudKey running only Protect). The old logic only looked at `reportedState.ipAddrs`, which is populated by the Network app - on consoles without it the list comes back empty, so the discovered host got an empty interface IP that couldn't be corrected manually. `reportedState.ip` (which those consoles do report) is now treated as one more candidate address.
+- **Double-NAT gateways no longer get their WAN IP as the host interface.** A WAN uplink behind another router (e.g. a 4G modem) hands the gateway an RFC1918 WAN address, which the old first-private-address pick could select over the actual LAN management IP. Candidate addresses matching any `reportedState.wans[].ipv4` are now used only as a last resort, after every non-WAN private candidate.
+- The private-address check for `172.*` now matches only the actual RFC1918 range (`172.16.0.0/12`); previously any `172.*` address - including public ones - was treated as private.
+
+### Changed
+- `{$UNIFI.LOCAL.API.ENABLED}` now follows the same propagation pattern as the credential/interval macros: a default (value `1`) lives on the root `Ubiquiti UniFi API` template and is copied to every discovered console at discovery time, so a fleet-wide default can be set once on the root host instead of per console. Per-console override on the console's own host still works as before.
+
 ## [1.4.0] - 2026-07-22
 
 Addresses two community-reported issues ([#2](../../issues/2), [#3](../../issues/3)) plus a self-inflicted retention problem noticed while investigating them.
